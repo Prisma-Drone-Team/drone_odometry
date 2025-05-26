@@ -5,11 +5,17 @@
 #include <px4_msgs/msg/vehicle_odometry.hpp>
 
 #include "px4_ros_com/frame_transforms.h"
- #include "nav_msgs/msg/odometry.hpp"
- #include <Eigen/Core>
- #include "utils.h"
+#include "nav_msgs/msg/odometry.hpp"
+#include <Eigen/Core>
+#include "utils.h"
 
- using namespace px4_ros_com::frame_transforms; 
+#include "tf2/exceptions.h"
+#include "tf2_ros/transform_listener.h"
+#include "tf2_ros/buffer.h"
+#include "tf2/LinearMath/Quaternion.h"
+#include "tf2_ros/transform_broadcaster.h"
+
+using namespace px4_ros_com::frame_transforms; //TODO remove
 
 using std::placeholders::_1;
 
@@ -17,6 +23,12 @@ class Px4TfPublisher : public rclcpp::Node
 {
   public:
     Px4TfPublisher(): Node("px4_tf_pub"){
+
+      //read params
+      this->declare_parameter<string>("px4_odom_frame_id_", "odom");
+      px4_odom_frame_id_ = this->get_parameter("px4_odom_frame_id_").as_string();
+      
+
       rmw_qos_profile_t qos_profile = rmw_qos_profile_sensor_data;
       auto qos = rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 5), qos_profile);
 
@@ -27,6 +39,10 @@ class Px4TfPublisher : public rclcpp::Node
        // ros odometry from companion pc, to be relied to px4
       companion_odometry_sub_ = this->create_subscription<nav_msgs::msg::Odometry>("/odometry/filtered", qos, std::bind(&Px4TfPublisher::companion_odom_cb, this, _1));
       vehicle_visual_odometry_pub_ = this->create_publisher<px4_msgs::msg::VehicleOdometry>("/fmu/in/vehicle_visual_odometry", qos); // /fmu/in/vehicle_mocap_odometry or /fmu/in/vehicle_visual_odometry
+      
+      tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+      tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
+      tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
       
       /* TODO
         1) add tf broadcaster
@@ -57,6 +73,8 @@ class Px4TfPublisher : public rclcpp::Node
 
       px4_msgs::msg::VehicleOdometry px4_odom;
 
+      
+
       /*TODO:
         1) convert from odom child frame ( eg cam frame) to base link :
               N.B. not useful if passed in robot localization
@@ -73,6 +91,16 @@ class Px4TfPublisher : public rclcpp::Node
 
       */
 
+        //1)
+      try {
+        auto Tf_c_b = _tf_buffer->lookupTransform( ros_odom.child_frame_id, "base_link", tf2::TimePointZero);
+        Eigen::Matrix4d T_c_b = T_from_tf(Tf_c_b);
+        
+      } catch (tf2::TransformException &ex) {
+        RCLCPP_WARN(this->get_logger(), "%s", ex.what());
+      }
+      
+
       return px4_odom;
     }
 
@@ -86,10 +114,15 @@ class Px4TfPublisher : public rclcpp::Node
 
       px4_msgs::msg::VehicleOdometry msgdata = *msg;
       nav_msgs::msg::Odometry ros_odom = transform_px4_odometry_to_ros(msgdata);
-
+      geometry_msgs::msg::TransformStamped tf_odom;
 
 
       px4_odometry_out_pub_->publish(ros_odom); 
+
+      utilities::tf_from_odom(tf_odom,ros_odom);
+
+      tf_broadcaster_->sendTransform(tf_odom);
+
 
       /* TODO 
         1) publish tf carrefully selecting frames
@@ -98,7 +131,6 @@ class Px4TfPublisher : public rclcpp::Node
       */
        
     }
-
 
 
     nav_msgs::msg::Odometry transform_px4_odometry_to_ros(const  px4_msgs::msg::VehicleOdometry& px4_odom) { //custom
@@ -172,7 +204,7 @@ class Px4TfPublisher : public rclcpp::Node
 
       // Header
       ros_odom.header.stamp = rclcpp::Time(px4_odom.timestamp); // TODO check timing conversion stuff
-      ros_odom.header.frame_id = "map";
+      ros_odom.header.frame_id = px4_odom_frame_id_;
       ros_odom.child_frame_id = "base_link";   
 
       return ros_odom;
@@ -184,6 +216,14 @@ class Px4TfPublisher : public rclcpp::Node
 
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr companion_odometry_sub_;
     rclcpp::Publisher<px4_msgs::msg::VehicleOdometry>::SharedPtr vehicle_visual_odometry_pub_;
+
+    std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+    std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+
+    std::string px4_odom_frame_id_;
+
+
 };
 
 int main(int argc, char * argv[])

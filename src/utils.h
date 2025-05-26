@@ -489,6 +489,21 @@ namespace utilities{
 
 	}
 
+	inline void tf_from_odom(geometry_msgs::msg::TransformStamped& tf, nav_msgs::msg::Odometry& od){
+		tf.header.stamp = od.header.stamp;
+		tf.header.frame_id = od.header.frame_id;
+		tf.child_frame_id = od.child_frame_id;
+
+		tf.transform.rotation.w = od.pose.pose.orientation.w;
+		tf.transform.rotation.x = od.pose.pose.orientation.x;
+		tf.transform.rotation.y = od.pose.pose.orientation.y;
+		tf.transform.rotation.z = od.pose.pose.orientation.z;
+
+		tf.transform.translation.x = od.pose.pose.position.x;
+		tf.transform.translation.y = od.pose.pose.position.y;
+		tf.transform.translation.z = od.pose.pose.position.z;
+	}
+
 	inline Matrix4d T_inverse(Matrix4d T){
 		Matrix4d Tinv = Matrix4d::Identity();
 		
