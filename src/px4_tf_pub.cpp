@@ -28,7 +28,11 @@ class Px4TfPublisher : public rclcpp::Node
       companion_odometry_sub_ = this->create_subscription<nav_msgs::msg::Odometry>("/odometry/filtered", qos, std::bind(&Px4TfPublisher::companion_odom_cb, this, _1));
       vehicle_visual_odometry_pub_ = this->create_publisher<px4_msgs::msg::VehicleOdometry>("/fmu/in/vehicle_visual_odometry", qos); // /fmu/in/vehicle_mocap_odometry or /fmu/in/vehicle_visual_odometry
       
-     
+      /* TODO
+        1) add tf broadcaster
+        2) add parameters for : tf_pub_parent_frame (/odom if not slam, /map if slam TBD)
+        
+      */
       
 
       // test_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/px4/odometry_custom", qos);
