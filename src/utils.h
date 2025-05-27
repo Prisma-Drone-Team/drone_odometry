@@ -455,6 +455,9 @@ namespace utilities{
 		return Rot;
 	}
 
+
+	/*ROS2 odometry and tf conversions*/
+
 	inline Matrix4d T_from_odom(nav_msgs::msg::Odometry od){
 		Matrix4d T = Matrix4d::Identity();
 		Vector4d q(od.pose.pose.orientation.w,od.pose.pose.orientation.x,od.pose.pose.orientation.y,od.pose.pose.orientation.z);
@@ -489,7 +492,7 @@ namespace utilities{
 
 	}
 
-	inline void tf_from_odom(geometry_msgs::msg::TransformStamped& tf, nav_msgs::msg::Odometry& od){
+	inline void tf_from_odom(geometry_msgs::msg::TransformStamped& tf, const nav_msgs::msg::Odometry& od){
 		tf.header.stamp = od.header.stamp;
 		tf.header.frame_id = od.header.frame_id;
 		tf.child_frame_id = od.child_frame_id;
@@ -504,25 +507,76 @@ namespace utilities{
 		tf.transform.translation.z = od.pose.pose.position.z;
 	}
 
+	inline Vector6d twits_from_odom(const nav_msgs::msg::Odometry& od){
+		Vector6d tw;
+		tw << od.twist.twist.linear.x, od.twist.twist.linear.y, od.twist.twist.linear.z,  
+			  od.twist.twist.angular.x, od.twist.twist.angular.y, od.twist.twist.angular.z; 
+		return tw;	  
+	}
+
+	// inline Matrix6d adjoint(const Matrix4d & T){
+	// 	Matrix6d Adj;
+	// 	Matrix3d R = T.block(0,0,3,3);
+	// 	Vector3d r = T.block(0,3,3,1);
+
+	// 	Adj.block(0,0,3,3) = R;
+	// 	Adj.block(0,3,3,3) = R*skew(r);
+	// 	Adj.block(3,0,3,3) = Matrix3d::Zero();
+	// 	Adj.block(3,3,3,3)	= R_b_a;
+	// }
+
+	inline void odom_from_tf_and_twist(nav_msgs::msg::Odometry& od, const Matrix4d & T_o_b, const Vector6d & v_b_b){
+		
+		Matrix3d R =  T_o_b.block(0,0,3,3);
+		Vector3d p = T_o_b.block(0,3,3,1);
+		Vector4d q = rot2quat(R);
+
+		od.pose.pose.position.x = p[0];
+		od.pose.pose.position.y = p[1];
+		od.pose.pose.position.z = p[2];
+		od.pose.pose.orientation.w = q[0];
+		od.pose.pose.orientation.x = q[1];
+		od.pose.pose.orientation.y = q[2];
+		od.pose.pose.orientation.z = q[3];
+
+		od.twist.twist.linear.x = v_b_b[0];
+		od.twist.twist.linear.y = v_b_b[1];
+		od.twist.twist.linear.z = v_b_b[2];
+		od.twist.twist.angular.x = v_b_b[3];
+		od.twist.twist.angular.y = v_b_b[4];
+		od.twist.twist.angular.z = v_b_b[5];
+
+		
+	}
+
 	inline Matrix4d T_inverse(Matrix4d T){
 		Matrix4d Tinv = Matrix4d::Identity();
 		
 		Matrix3d R = T.block(0,0,3,3).transpose(); //Rinv
-		Vector3d o = T.block(0,3,3,1).transpose(); //col vect
+		Vector3d o = T.block(0,3,3,1); //col vect
 
 		Tinv.block(0,0,3,3) = R;
-		Tinv.block(0,3,1,3) = -R*o;
+		Tinv.block(0,3,3,1) = -R*o;
 
 		return Tinv;
 	}
+
 	
-	//TODO invert ? 
+	
+	inline Vector6d rotate_twist(const Vector6d &v_a_a, const Matrix4d & T_b_a){
+		Matrix3d R_b_a = T_b_a.block(0,0,3,3);
+		Vector3d r_b_ab = T_b_a.block(0,3,3,1);
+		Matrix6d Adj;
 
-	// static inline const Matrix3d  R_enu_ned =  XYZ2R(Vector3d(M_PI, 0.0, M_PI_2)); 
+		Adj.block(0,0,3,3) = R_b_a;
+		Adj.block(0,3,3,3) = skew(r_b_ab)*R_b_a; //skew(-r_b_ab)*R_b_a;
+		Adj.block(3,0,3,3) = Matrix3d::Zero();
+		Adj.block(3,3,3,3)	= R_b_a;
 
-	// static inline const Matrix3d  R_frd_flu =  XYZ2R(Vector3d(M_PI, 0.0, 0.0));
-
-
+		Vector6d v_b_b = Adj*v_a_a;
+		return v_b_b;
+	}
+	
 	static inline const Matrix3d R_enu_ned = (Matrix3d() << 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0).finished();
 	static inline const Matrix3d R_frd_flu = (Matrix3d() << 1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0).finished();
 

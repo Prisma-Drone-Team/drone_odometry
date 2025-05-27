@@ -25,8 +25,11 @@ class Px4TfPublisher : public rclcpp::Node
     Px4TfPublisher(): Node("px4_tf_pub"){
 
       //read params
-      this->declare_parameter<string>("px4_odom_frame_id_", "odom");
-      px4_odom_frame_id_ = this->get_parameter("px4_odom_frame_id_").as_string();
+      this->declare_parameter<string>("px4_odom_frame_id", "odom"); //tf_pub_parent_frame (/odom if not slam, /map if slam) TBD
+      px4_odom_frame_id_ = this->get_parameter("px4_odom_frame_id").as_string();
+
+      this->declare_parameter<bool>("publish_tf", false);
+      publish_tf_ = this->get_parameter("publish_tf").as_bool();
       
 
       rmw_qos_profile_t qos_profile = rmw_qos_profile_sensor_data;
@@ -37,7 +40,7 @@ class Px4TfPublisher : public rclcpp::Node
       px4_odometry_out_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/px4/odometry/out", qos);
 
        // ros odometry from companion pc, to be relied to px4
-      companion_odometry_sub_ = this->create_subscription<nav_msgs::msg::Odometry>("/odometry/filtered", qos, std::bind(&Px4TfPublisher::companion_odom_cb, this, _1));
+      companion_odometry_sub_ = this->create_subscription<nav_msgs::msg::Odometry>("/zed/zed_node/odom", qos, std::bind(&Px4TfPublisher::companion_odom_cb, this, _1));
       vehicle_visual_odometry_pub_ = this->create_publisher<px4_msgs::msg::VehicleOdometry>("/fmu/in/vehicle_visual_odometry", qos); // /fmu/in/vehicle_mocap_odometry or /fmu/in/vehicle_visual_odometry
       
       tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
@@ -51,7 +54,7 @@ class Px4TfPublisher : public rclcpp::Node
       */
       
 
-      // test_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/px4/odometry_custom", qos);
+      test_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/odometry_rotated", qos);
     }
 
   private:
@@ -63,46 +66,98 @@ class Px4TfPublisher : public rclcpp::Node
       // std::cout << "frame: "         				<< msg->header.header.frame 			<< std::endl;
 
       
-      px4_msgs::msg::VehicleOdometry px4_odom = convert_from_ros(*msg);
+      // px4_msgs::msg::VehicleOdometry px4_odom = convert_from_ros(*msg);
 
-      vehicle_visual_odometry_pub_->publish(px4_odom); 
+      nav_msgs::msg::Odometry odom_rot = rotate_ros_odom(*msg);
+
+      test_pub_->publish(odom_rot);
+
+      // vehicle_visual_odometry_pub_->publish(px4_odom); 
+
+
       
+      //todo first_odom = true;
     }
 
-    px4_msgs::msg::VehicleOdometry convert_from_ros(const  nav_msgs::msg::Odometry & ros_odom){
+    nav_msgs::msg::Odometry rotate_ros_odom(const  nav_msgs::msg::Odometry & ros_odom){
+      //rotate ros odom from odom child frame to /base_link, leave parent frame unchanged
+      nav_msgs::msg::Odometry ros_odom_out;
 
-      px4_msgs::msg::VehicleOdometry px4_odom;
-
+      Eigen::Matrix4d T_b_c;
       
-
-      /*TODO:
-        1) convert from odom child frame ( eg cam frame) to base link :
-              N.B. not useful if passed in robot localization
-              tf loockup for sensor frame to base link, only first time if static, to get T
-              rotate twist and position and cov ecc
-        2) add displacement from /map to odom parent frame to account for slam correction or similar
-              tf loockup for map to sensor odom frame link to get T
-              rotate and translate position
-              rotate velocity
-        3) transform to px4 coordinate and fill message:
-              check for timestamp conversion
-              choose in wich frame publish, if 1 1 as px4 odom in
-              raotate everithing             
-
-      */
-
-        //1)
       try {
-        auto Tf_c_b = _tf_buffer->lookupTransform( ros_odom.child_frame_id, "base_link", tf2::TimePointZero);
-        Eigen::Matrix4d T_c_b = T_from_tf(Tf_c_b);
+        // auto Tf_b_c = tf_buffer_->lookupTransform("base_link", ros_odom.child_frame_id , tf2::TimePointZero);
+        auto Tf_b_c = tf_buffer_->lookupTransform("base_link", ros_odom.child_frame_id, rclcpp::Time(0),100ms);
+
+        
+        T_b_c = utilities::T_from_tf(Tf_b_c); // TODO make global and do only until first odom
+        // cout<<"get TF base_link ->child : \n"<<T_b_c<<"\n\n";
         
       } catch (tf2::TransformException &ex) {
         RCLCPP_WARN(this->get_logger(), "%s", ex.what());
       }
       
 
-      return px4_odom;
+      utilities::Vector6d v_c_c = utilities::twits_from_odom(ros_odom);
+      Eigen::Matrix4d T_o_c = utilities::T_from_odom(ros_odom);
+
+      utilities::Vector6d v_b_b = utilities::rotate_twist(v_c_c,T_b_c);
+
+      Eigen::Matrix4d T_c_b = utilities::T_inverse(T_b_c);
+
+      Eigen::Matrix4d T_o_b = T_o_c*T_c_b;
+
+      utilities::odom_from_tf_and_twist(ros_odom_out, T_o_b, v_b_b);
+
+      // Header
+      ros_odom_out.header.stamp = this->get_clock()->now();
+      ros_odom_out.header.frame_id = ros_odom.header.frame_id;
+      ros_odom_out.child_frame_id = "base_link"; 
+
+      return ros_odom_out;
     }
+
+    // px4_msgs::msg::VehicleOdometry convert_from_ros(const  nav_msgs::msg::Odometry & ros_odom){
+
+    //   px4_msgs::msg::VehicleOdometry px4_odom;
+
+    //   /*TODO:
+    //     1) convert from odom child frame ( eg cam frame) to base link :
+    //           N.B. not useful if passed in robot localization
+    //           tf loockup for sensor frame to base link, only first time if static, to get T
+    //           rotate twist and position and cov ecc
+    //     2) add displacement from /map to odom parent frame to account for slam correction or similar
+    //           tf loockup for map to sensor odom frame link to get T
+    //           rotate and translate position
+    //           rotate velocity
+    //     3) transform to px4 coordinate and fill message:
+    //           check for timestamp conversion
+    //           choose in wich frame publish, if 1 1 as px4 odom in
+    //           raotate everithing             
+
+    //   */
+
+    //     //1)
+
+    //   if(ros_odom.child_frame_id != "base_link"){ //&& !first_odom_
+    //     try {
+    //       auto Tf_b_c = tf_buffer_->lookupTransform("base_link", ros_odom.child_frame_id, tf2::TimePointZero);
+    //       Eigen::Matrix4d T_b_c = utilities::T_from_tf(Tf_b_c); // TODO make global and do only until first odom
+          
+    //     } catch (tf2::TransformException &ex) {
+    //       RCLCPP_WARN(this->get_logger(), "%s", ex.what());
+    //     }
+    //   }
+
+    //   utilities::Vector6d v_c_c = utilities::twits_from_odom(ros_odom);
+    //   Eigen::Matrix4d T_o_c = utilities::T_from_odom(ros_odom);
+
+    //   utilities::Vector6d v_b_b = utilities::rotate_twist(v_c_c,T_b_c);
+
+    //   Eigen::Matrix4d T_o_b = T_o_c*T_b_c;
+
+    //   return px4_odom;
+    // }
 
 
     
@@ -119,9 +174,11 @@ class Px4TfPublisher : public rclcpp::Node
 
       px4_odometry_out_pub_->publish(ros_odom); 
 
-      utilities::tf_from_odom(tf_odom,ros_odom);
-
-      tf_broadcaster_->sendTransform(tf_odom);
+      if(publish_tf_){
+        utilities::tf_from_odom(tf_odom,ros_odom);
+        tf_broadcaster_->sendTransform(tf_odom);
+      }
+      
 
 
       /* TODO 
@@ -221,7 +278,9 @@ class Px4TfPublisher : public rclcpp::Node
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
+    //params
     std::string px4_odom_frame_id_;
+    bool publish_tf_;
 
 
 };
