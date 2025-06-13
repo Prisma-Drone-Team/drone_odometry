@@ -545,8 +545,21 @@ namespace utilities{
 		od.twist.twist.angular.x = v_b_b[3];
 		od.twist.twist.angular.y = v_b_b[4];
 		od.twist.twist.angular.z = v_b_b[5];
+	}
 
+	inline void odom_from_tf(nav_msgs::msg::Odometry& od, const Matrix4d & T_o_b){
 		
+		Matrix3d R =  T_o_b.block(0,0,3,3);
+		Vector3d p = T_o_b.block(0,3,3,1);
+		Vector4d q = rot2quat(R);
+
+		od.pose.pose.position.x = p[0];
+		od.pose.pose.position.y = p[1];
+		od.pose.pose.position.z = p[2];
+		od.pose.pose.orientation.w = q[0];
+		od.pose.pose.orientation.x = q[1];
+		od.pose.pose.orientation.y = q[2];
+		od.pose.pose.orientation.z = q[3];
 	}
 
 	inline Matrix4d T_inverse(Matrix4d T){
@@ -575,6 +588,50 @@ namespace utilities{
 
 		Vector6d v_b_b = Adj*v_a_a;
 		return v_b_b;
+	}
+
+	inline Matrix6d rotate_twist_cov(const Matrix6d &cov_a_a, const Matrix4d & T_b_a){
+		Matrix3d R_b_a = T_b_a.block(0,0,3,3);
+		Vector3d r_b_ab = T_b_a.block(0,3,3,1);
+		Matrix6d Adj;
+
+		Adj.block(0,0,3,3) = R_b_a;
+		Adj.block(0,3,3,3) = skew(r_b_ab)*R_b_a; //skew(-r_b_ab)*R_b_a;
+		Adj.block(3,0,3,3) = Matrix3d::Zero();
+		Adj.block(3,3,3,3)	= R_b_a;
+
+		Matrix6d cov_b_b = Adj*cov_a_a*Adj.transpose();
+		return cov_b_b;
+	}
+
+	inline Matrix6d rotate_pose_cov(const Matrix6d &cov_a_a, const Matrix4d & T_b_a){
+		Matrix3d R_b_a = T_b_a.block(0,0,3,3);
+		// Vector3d r_b_ab = T_b_a.block(0,3,3,1);
+		Matrix6d Adj;
+
+		Adj.block(0,0,3,3) = R_b_a;
+		Adj.block(0,3,3,3) = Matrix3d::Zero();
+		Adj.block(3,0,3,3) = Matrix3d::Zero();
+		Adj.block(3,3,3,3)	= R_b_a;
+
+		Matrix6d cov_b_b = Adj*cov_a_a*Adj.transpose();
+		return cov_b_b;
+	}
+
+	inline Matrix6d cov_to_mat(const std::array<double, 36> & msg_cov){
+		Eigen::Map<const Matrix6d> matrix_map(msg_cov.data());
+    	return matrix_map; 
+	}
+
+	inline void mat_to_cov(std::array<double, 36> & msg_cov, Matrix6d cov){
+		msg_cov = {
+			cov(0,0), cov(0,1), cov(0,2),cov(0,3), cov(0,4), cov(0,5),
+			cov(1,0), cov(1,1), cov(1,2),cov(1,3), cov(1,4), cov(1,5),
+			cov(2,0), cov(2,1), cov(2,2),cov(2,3), cov(2,4), cov(2,5),
+			cov(3,0), cov(3,1), cov(3,2),cov(3,3), cov(3,4), cov(3,5),
+			cov(4,0), cov(4,1), cov(4,2),cov(4,3), cov(4,4), cov(4,5),
+			cov(5,0), cov(5,1), cov(5,2),cov(5,3), cov(5,4), cov(5,5),
+		};
 	}
 	
 	static inline const Matrix3d R_enu_ned = (Matrix3d() << 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0).finished();

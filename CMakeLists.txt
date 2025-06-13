@@ -18,6 +18,11 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(px4_ros_com REQUIRED)
 
+find_package(Sophus REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(fmt REQUIRED)
+
+# executable px4_tf_pub
 add_executable(px4_tf_pub src/px4_tf_pub.cpp)
 target_include_directories(px4_tf_pub PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -36,9 +41,50 @@ ament_target_dependencies(
   "tf2_ros"
   "px4_ros_com"
 )
-
 install(TARGETS px4_tf_pub
   DESTINATION lib/${PROJECT_NAME})
+
+# executable odom_derivative
+add_executable(odom_derivative src/odom_derivative.cpp)
+target_link_libraries(odom_derivative
+  Sophus::Sophus
+  Eigen3::Eigen
+  fmt::fmt  # Add this line
+)
+target_include_directories(px4_tf_pub PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_compile_features(odom_derivative PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
+ament_target_dependencies(
+  odom_derivative
+  "rclcpp"
+  "builtin_interfaces"
+  "std_msgs"
+  "geometry_msgs"
+  "sensor_msgs"
+  "nav_msgs"
+  "px4_msgs"
+  "tf2"
+  "tf2_ros"
+  "px4_ros_com"  
+)
+install(TARGETS odom_derivative
+  DESTINATION lib/${PROJECT_NAME})
+
+
+# Install launch files
+install(DIRECTORY 
+    launch
+    DESTINATION share/${PROJECT_NAME}
+    )
+
+# Install config files
+install(DIRECTORY 
+    config
+    DESTINATION share/${PROJECT_NAME}
+    ) 
+
+
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
