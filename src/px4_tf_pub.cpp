@@ -33,6 +33,14 @@ class Px4TfPublisher : public rclcpp::Node
 
       this->declare_parameter<bool>("feed_twist_to_px4", true);
       feed_twist_to_px4_ = this->get_parameter("feed_twist_to_px4").as_bool();
+
+      this->declare_parameter<bool>("odom_child_is_not_base_link", false);
+      odom_child_is_not_base_link_ = this->get_parameter("odom_child_is_not_base_link").as_bool();
+      
+      this->declare_parameter<bool>("odom_parent_is_not_map", false);
+      odom_parent_is_not_map_ = this->get_parameter("odom_parent_is_not_map").as_bool();
+
+      
       
 
       rmw_qos_profile_t qos_profile = rmw_qos_profile_sensor_data;
@@ -43,7 +51,7 @@ class Px4TfPublisher : public rclcpp::Node
       px4_odometry_out_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/px4/odometry/out", qos);
 
        // ros odometry from companion pc, to be relied to px4
-      companion_odometry_sub_ = this->create_subscription<nav_msgs::msg::Odometry>("/zed/zed_node/odom", qos, std::bind(&Px4TfPublisher::companion_odom_cb, this, _1));
+      companion_odometry_sub_ = this->create_subscription<nav_msgs::msg::Odometry>("/odometry/filtered", qos, std::bind(&Px4TfPublisher::companion_odom_cb, this, _1));
       vehicle_visual_odometry_pub_ = this->create_publisher<px4_msgs::msg::VehicleOdometry>("/fmu/in/vehicle_visual_odometry", qos); // /fmu/in/vehicle_mocap_odometry or /fmu/in/vehicle_visual_odometry
       
       tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
@@ -64,8 +72,8 @@ class Px4TfPublisher : public rclcpp::Node
 
     void companion_odom_cb(const nav_msgs::msg::Odometry::UniquePtr msg){
 
-      std::cout << "============================="     							<< std::endl;
-      std::cout << "\n\nRECEIVED Companion ODOMETRY  DATA"   					<< std::endl;
+      std::cout << "============================="     							<< std::endl;    //TEST
+      std::cout << "\n\nRECEIVED Companion ODOMETRY  DATA"   					<< std::endl;  //TEST
       // std::cout << "frame: "         				<< msg->header.header.frame 			<< std::endl;
 
       /*TODO:
@@ -84,20 +92,122 @@ class Px4TfPublisher : public rclcpp::Node
               check if feed_twist_to_px4_ param
       */
       
+      nav_msgs::msg::Odometry odom = *msg;
 
-      nav_msgs::msg::Odometry odom_rot = rotate_ros_odom_child(*msg); //change from  chilt to base_link
+      if (odom_child_is_not_base_link_){
+        odom = rotate_ros_odom_child(odom); //change from  child to base_link
+        // test_pub_->publish(odom);
+      }
 
+      if (odom_parent_is_not_map_){
+        odom = rotate_ros_odom_parent(odom); //change wrt odom to wrt map
+        // test_pub_->publish(odom);
+      }
 
-      nav_msgs::msg::Odometry odom_map = rotate_ros_odom_parent(odom_rot); //change wrt odom to wrt map
-
-      test_pub_->publish(odom_rot);
-
-      // px4_msgs::msg::VehicleOdometry px4_odom = convert_from_ros(*odom_rot);
-      // vehicle_visual_odometry_pub_->publish(px4_odom); 
-
-
+      px4_msgs::msg::VehicleOdometry px4_odom = transform_ros_odometry_to_px4(odom);
+      vehicle_visual_odometry_pub_->publish(px4_odom); 
       
       //todo first_odom = true;
+    }
+
+    px4_msgs::msg::VehicleOdometry transform_ros_odometry_to_px4(const  nav_msgs::msg::Odometry& ros_odom) { //custom
+      px4_msgs::msg::VehicleOdometry px4_odom;
+
+      px4_odom.pose_frame = px4_odom.POSE_FRAME_NED;
+      //position
+      Eigen::Vector3d p_enu(ros_odom.pose.pose.position.x,ros_odom.pose.pose.position.y, ros_odom.pose.pose.position.z);
+      Eigen::Vector3d p_ned = utilities::R_ned_enu*p_enu;
+      px4_odom.position[0] = p_ned.x();
+      px4_odom.position[1] = p_ned.y();
+      px4_odom.position[2] = p_ned.z();
+
+      //attitude
+      Eigen::Vector4d q_enu_flu(ros_odom.pose.pose.orientation.w, ros_odom.pose.pose.orientation.x, ros_odom.pose.pose.orientation.y, ros_odom.pose.pose.orientation.z);
+      Eigen::Matrix3d R_enu_flu = utilities::QuatToMat(q_enu_flu);
+      Eigen::Matrix3d R_ned_frd = utilities::R_ned_enu*R_enu_flu*utilities::R_flu_frd;
+      Eigen::Vector4d q_ned_frd = utilities::rot2quat(R_ned_frd);
+      q_ned_frd = q_ned_frd/q_ned_frd.norm();
+      px4_odom.q[0] = q_ned_frd[0]; 
+      px4_odom.q[1] = q_ned_frd[1];
+      px4_odom.q[2] = q_ned_frd[2];
+      px4_odom.q[3] = q_ned_frd[3];
+
+
+      if(feed_twist_to_px4_){
+        px4_odom.velocity_frame = px4_odom.VELOCITY_FRAME_BODY_FRD;
+        //velocity
+        Eigen::Vector3d v_flu(ros_odom.twist.twist.linear.x, ros_odom.twist.twist.linear.y, ros_odom.twist.twist.linear.z);
+        // Eigen::Vector3d v_flu = R_ned_frd*utilities::R_flu_frd*v_ned; //if VELOCITY_FRAME_NED
+        Eigen::Vector3d v_frd = utilities::R_frd_flu*v_flu;
+        px4_odom.velocity[0] = v_frd.x();
+        px4_odom.velocity[1] = v_frd.y();
+        px4_odom.velocity[2] = v_frd.z();
+
+        //angular velocity
+        Eigen::Vector3d w_flu(ros_odom.twist.twist.angular.x, ros_odom.twist.twist.angular.y, ros_odom.twist.twist.angular.z);
+        Eigen::Vector3d w_frd = utilities::R_frd_flu*w_flu;
+        px4_odom.angular_velocity[0] = w_frd.x();
+        px4_odom.angular_velocity[1] = w_frd.y();
+        px4_odom.angular_velocity[2] = w_frd.z();
+      }
+      else{
+        px4_odom.velocity_frame =2 ;
+        px4_odom.velocity[0] = NAN;
+        px4_odom.velocity[1] = NAN;
+        px4_odom.velocity[2] = NAN;
+        px4_odom.angular_velocity[0] = NAN;
+        px4_odom.angular_velocity[1] = NAN;
+        px4_odom.angular_velocity[2] = NAN;
+      }
+      
+      //covariance
+      utilities::Matrix6d cov_pos_ros = utilities::cov_to_mat(ros_odom.pose.covariance);
+      utilities::Matrix6d cov_vel_ros = utilities::cov_to_mat(ros_odom.twist.covariance);
+
+      Eigen::Matrix3d cov_pos_enu = cov_pos_ros.block(0,0,3,3);
+      Eigen::Matrix3d cov_rot_enu = cov_pos_ros.block(3,3,3,3);
+      Eigen::Matrix3d cov_vel_flu = cov_vel_ros.block(0,0,3,3);
+
+      Eigen::Matrix3d R = utilities::R_ned_enu; //pos
+      Eigen::Matrix3d cov_pos_ned = R*cov_pos_enu*R.transpose();
+
+      R = utilities::R_frd_flu; //vel 
+      // R = R_ned_frd*utilities::R_flu_frd; //if VELOCITY_FRAME_NED
+      Eigen::Matrix3d cov_vel_frd = R*cov_vel_flu*R.transpose();
+
+      R = utilities::R_ned_enu*R_enu_flu*utilities::R_flu_frd;
+      Eigen::Matrix3d cov_rot_ned = R*cov_rot_enu*R.transpose();
+
+      px4_odom.position_variance[0] = cov_pos_ned(0,0);
+      px4_odom.position_variance[1] = cov_pos_ned(1,1);
+      px4_odom.position_variance[2] = cov_pos_ned(2,2);
+
+      px4_odom.orientation_variance[0] = cov_rot_ned(0,0);
+      px4_odom.orientation_variance[1] = cov_rot_ned(1,1);
+      px4_odom.orientation_variance[2] = cov_rot_ned(2,2);
+
+      if(feed_twist_to_px4_){
+        px4_odom.velocity_variance[0] = cov_vel_frd(0,0);
+        px4_odom.velocity_variance[1] = cov_vel_frd(1,1);
+        px4_odom.velocity_variance[2] = cov_vel_frd(2,2);
+      }
+      else{
+        px4_odom.velocity_variance[0] = NAN;
+        px4_odom.velocity_variance[1] = NAN;
+        px4_odom.velocity_variance[2] = NAN;
+      }
+      
+
+      // Header
+      // It seems that time is updated automatically on PX4 side
+      // after v1.14
+      // px4_odom.timestamp = 0; //static_cast<uint64_t>(msg.header.stamp.sec*1e6) + static_cast<uint64_t>(msg.header.stamp.nanosec/1e3);
+      // px4_odom.timestamp_sample = 0;
+
+      //from vinsco
+      px4_odom.timestamp = std::chrono::time_point_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()).time_since_epoch().count();
+       
+      return px4_odom;
     }
 
     nav_msgs::msg::Odometry rotate_ros_odom_child(const  nav_msgs::msg::Odometry & ros_odom){
@@ -185,36 +295,7 @@ class Px4TfPublisher : public rclcpp::Node
       return ros_odom_out;
     }
 
-    // px4_msgs::msg::VehicleOdometry convert_from_ros(const  nav_msgs::msg::Odometry & ros_odom){
-
-    //   px4_msgs::msg::VehicleOdometry px4_odom;
-
-  
-
-    //     //1)
-
-    //   if(ros_odom.child_frame_id != "base_link"){ //&& !first_odom_
-    //     try {
-    //       auto Tf_b_c = tf_buffer_->lookupTransform("base_link", ros_odom.child_frame_id, tf2::TimePointZero);
-    //       Eigen::Matrix4d T_b_c = utilities::T_from_tf(Tf_b_c); // TODO make global and do only until first odom
-          
-    //     } catch (tf2::TransformException &ex) {
-    //       RCLCPP_WARN(this->get_logger(), "%s", ex.what());
-    //     }
-    //   }
-
-    //   utilities::Vector6d v_c_c = utilities::twits_from_odom(ros_odom);
-    //   Eigen::Matrix4d T_o_c = utilities::T_from_odom(ros_odom);
-
-    //   utilities::Vector6d v_b_b = utilities::rotate_twist(v_c_c,T_b_c);
-
-    //   Eigen::Matrix4d T_o_b = T_o_c*T_b_c;
-
-    //   return px4_odom;
-    // }
-
-
-    
+       
     void px4_odom_out_cb(const px4_msgs::msg::VehicleOdometry::UniquePtr msg){
       
       std::cout << "============================="     							<< std::endl; //TEST
@@ -234,8 +315,6 @@ class Px4TfPublisher : public rclcpp::Node
         tf_broadcaster_->sendTransform(tf_odom);
       }
       
-
-
       /* TODO 
         1) publish tf carrefully selecting frames
               if /odom -> /base_link check that is not the same of the position given in input to px4, that is actually /map -> /baselink if achived point 2) in convert_from_ros()
@@ -256,10 +335,10 @@ class Px4TfPublisher : public rclcpp::Node
 
       //position
       Eigen::Vector3d p_ned(px4_odom.position[0], px4_odom.position[1], px4_odom.position[2]);
-      Eigen::Vector3d position_enu = utilities::R_enu_ned*p_ned;
-      ros_odom.pose.pose.position.x = position_enu.x();
-      ros_odom.pose.pose.position.y = position_enu.y();
-      ros_odom.pose.pose.position.z = position_enu.z();
+      Eigen::Vector3d p_enu = utilities::R_enu_ned*p_ned;
+      ros_odom.pose.pose.position.x = p_enu.x();
+      ros_odom.pose.pose.position.y = p_enu.y();
+      ros_odom.pose.pose.position.z = p_enu.z();
 
       //attitude
       Eigen::Vector4d q_ned_frd(px4_odom.q[0], px4_odom.q[1], px4_odom.q[2], px4_odom.q[3]);
@@ -360,6 +439,8 @@ class Px4TfPublisher : public rclcpp::Node
     std::string px4_odom_frame_id_;
     bool publish_tf_;
     bool feed_twist_to_px4_;
+    bool odom_child_is_not_base_link_;
+    bool odom_parent_is_not_map_;
 
 
 };
