@@ -72,8 +72,8 @@ class Px4TfPublisher : public rclcpp::Node
 
     void companion_odom_cb(const nav_msgs::msg::Odometry::UniquePtr msg){
 
-      std::cout << "============================="     							<< std::endl;    //TEST
-      std::cout << "\n\nRECEIVED Companion ODOMETRY  DATA"   					<< std::endl;  //TEST
+      // std::cout << "============================="     							<< std::endl;    //TEST
+      // std::cout << "\n\nRECEIVED Companion ODOMETRY  DATA"   					<< std::endl;  //TEST
       // std::cout << "frame: "         				<< msg->header.header.frame 			<< std::endl;
 
       /*TODO:
@@ -298,9 +298,9 @@ class Px4TfPublisher : public rclcpp::Node
        
     void px4_odom_out_cb(const px4_msgs::msg::VehicleOdometry::UniquePtr msg){
       
-      std::cout << "============================="     							<< std::endl; //TEST
-      std::cout << "\n\nRECEIVED Vehicle ODOMETRY  DATA"   					<< std::endl; //TEST
-      std::cout << "ts: "         				<< msg->timestamp   			<< std::endl; //TEST
+      // std::cout << "============================="     							<< std::endl; //TEST
+      // std::cout << "\n\nRECEIVED Vehicle ODOMETRY  DATA"   					<< std::endl; //TEST
+      // std::cout << "ts: "         				<< msg->timestamp   			<< std::endl; //TEST
 
       px4_msgs::msg::VehicleOdometry msgdata = *msg;
       nav_msgs::msg::Odometry ros_odom = transform_px4_odometry_to_ros(msgdata);
