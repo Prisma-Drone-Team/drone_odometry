@@ -22,6 +22,19 @@ def generate_launch_description():
 
     zed_cam_launch_path = os.path.join(get_package_share_directory('drone_odometry2'), 'launch', 'zed_camera.launch.py')
 
+    parameters=[{'frame_id':'base_link',
+                 'odom_frame_id':'odom',
+                 'subscribe_rgbd':True,
+                 'approx_sync':False,
+                 'wait_imu_to_init':True,
+                 'initial_pose' :'0 0 0 0 0 0'}]
+
+                #  'pub_loc_pose_only_when_localizing':False 1Hz
+
+    remappings=[('imu', '/zed_front/zed_node/imu/data')]
+
+    # remappings.append(('odom', '/zed_front/zed_node/odom'))
+    remappings.append(('odom', '/px4/odometry/out'))
 
     return LaunchDescription([
 
@@ -74,9 +87,33 @@ def generate_launch_description():
                 ('/odometry/filtered', '/zed_front/zed_node/odom')
             ],
             arguments=['--log-level', 'info']
-        )
+        ),  
+        
+        ### RTABMAP ###
 
         
-        
+
+        # Sync rgb/depth/camera_info together
+        launch_ros.actions.Node(   
+            package='rtabmap_sync', executable='rgbd_sync', output='screen',
+            parameters=parameters,
+            remappings=[('rgb/image', '/zed_front/zed_node/rgb/image_rect_color'),
+                        ('rgb/camera_info', '/zed_front/zed_node/rgb/camera_info'),
+                        ('depth/image', '/zed_front/zed_node/depth/depth_registered')]),
+
+        # Visual odometry
+        # Node(
+        #     package='rtabmap_odom', executable='rgbd_odometry', output='screen',
+        #     condition=UnlessCondition(LaunchConfiguration('use_zed_odometry')),
+        #     parameters=parameters,
+        #     remappings=remappings,),
+
+        # VSLAM
+        launch_ros.actions.Node(
+            package='rtabmap_slam', executable='rtabmap', output='screen',
+            parameters=parameters,
+            remappings=remappings,
+            arguments=['-d']),
+
 
     ])
