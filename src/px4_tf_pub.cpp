@@ -3,6 +3,9 @@
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
 #include <px4_msgs/msg/vehicle_odometry.hpp>
+#include <px4_msgs/msg/trajectory_setpoint.hpp>
+#include <px4_msgs/msg/offboard_control_mode.hpp>
+#include <px4_msgs/msg/vehicle_command.hpp>
 
 #include "px4_ros_com/frame_transforms.h"
 #include "nav_msgs/msg/odometry.hpp"
@@ -21,6 +24,30 @@ using std::placeholders::_1;
 
 class Px4TfPublisher : public rclcpp::Node
 {
+  private:
+    rclcpp::Subscription<px4_msgs::msg::VehicleOdometry>::SharedPtr vehicle_odometry_out_sub_;
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr px4_odometry_out_pub_;
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr test_pub_;
+
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr companion_odometry_sub_;
+    rclcpp::Publisher<px4_msgs::msg::VehicleOdometry>::SharedPtr vehicle_visual_odometry_pub_;
+
+    rclcpp::Subscription<px4_msgs::msg::TrajectorySetpoint>::SharedPtr trajectory_setpoint_ros_sub_;
+    rclcpp::Publisher<px4_msgs::msg::TrajectorySetpoint>::SharedPtr trajectory_setpoint_pub_;
+    rclcpp::Publisher<px4_msgs::msg::OffboardControlMode>::SharedPtr offboard_control_mode_pub_;
+    rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr vehicle_command_pub_;  
+
+    std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+    std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+
+    // params
+    std::string px4_odom_frame_id_;
+    bool publish_tf_;
+    bool feed_twist_to_px4_;
+    bool odom_child_is_not_base_link_;
+    bool odom_parent_is_not_map_;
+
   public:
     Px4TfPublisher(): Node("px4_tf_pub"){
 
@@ -40,9 +67,6 @@ class Px4TfPublisher : public rclcpp::Node
       this->declare_parameter<bool>("odom_parent_is_not_map", false);
       odom_parent_is_not_map_ = this->get_parameter("odom_parent_is_not_map").as_bool();
 
-      
-      
-
       rmw_qos_profile_t qos_profile = rmw_qos_profile_sensor_data;
       auto qos = rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 5), qos_profile);
 
@@ -54,6 +78,11 @@ class Px4TfPublisher : public rclcpp::Node
       companion_odometry_sub_ = this->create_subscription<nav_msgs::msg::Odometry>("/odometry/filtered", qos, std::bind(&Px4TfPublisher::companion_odom_cb, this, _1));
       vehicle_visual_odometry_pub_ = this->create_publisher<px4_msgs::msg::VehicleOdometry>("/fmu/in/vehicle_visual_odometry", qos); // /fmu/in/vehicle_mocap_odometry or /fmu/in/vehicle_visual_odometry
       
+      trajectory_setpoint_ros_sub_ = this->create_subscription<px4_msgs::msg::TrajectorySetpoint>("/px4/trajectory_setpoint_enu", qos, std::bind(&Px4TfPublisher::trajectory_setpoint_ros_cb, this, _1));
+      trajectory_setpoint_pub_ = this->create_publisher<px4_msgs::msg::TrajectorySetpoint>("/fmu/in/trajectory_setpoint", qos);
+      offboard_control_mode_pub_ = this->create_publisher<px4_msgs::msg::OffboardControlMode>("/fmu/in/offboard_control_mode", qos);
+      vehicle_command_pub_ = this->create_publisher<px4_msgs::msg::VehicleCommand>("/fmu/in/vehicle_command", qos);
+
       tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
       tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
       tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -65,10 +94,62 @@ class Px4TfPublisher : public rclcpp::Node
       */
       
 
-      test_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/odometry_rotated", qos);
+      test_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/odometry_rotated", qos); //TODO remove
     }
 
   private:
+
+    void trajectory_setpoint_ros_cb(const px4_msgs::msg::TrajectorySetpoint::UniquePtr msg_enu){
+      //setpoint
+      px4_msgs::msg::TrajectorySetpoint msg_ned;
+      Eigen::Vector3d x_enu;
+      Eigen::Vector3d x_ned;
+
+      x_enu << msg_enu->position[0], msg_enu->position[1], msg_enu->position[2];
+      x_ned = utilities::R_ned_enu*x_enu;
+      msg_ned.position[0] = x_ned.x();
+      msg_ned.position[1] = x_ned.y();
+      msg_ned.position[2] = x_ned.z();
+
+      x_enu << msg_enu->velocity[0], msg_enu->velocity[1], msg_enu->velocity[2];
+      x_ned = utilities::R_ned_enu*x_enu;
+      msg_ned.velocity[0] = x_ned.x();
+      msg_ned.velocity[1] = x_ned.y();
+      msg_ned.velocity[2] = x_ned.z();
+
+      x_enu << msg_enu->acceleration[0], msg_enu->acceleration[1], msg_enu->acceleration[1];
+      x_ned = utilities::R_ned_enu*x_enu;
+      msg_ned.acceleration[0] = x_ned.x();
+      msg_ned.acceleration[1] = x_ned.y();
+      msg_ned.acceleration[2] = x_ned.z();
+
+      x_enu << msg_enu->jerk[0], msg_enu->jerk[1], msg_enu->jerk[2];
+      x_ned = utilities::R_ned_enu*x_enu;
+      msg_ned.jerk[0] = x_ned.x();
+      msg_ned.jerk[1] = x_ned.y();
+      msg_ned.jerk[2] = x_ned.z();
+
+      Eigen::Matrix3d R_enu_flu = utilities::XYZ2R(Eigen::Vector3d(0, msg_enu->yaw, 0));
+      Eigen::Matrix3d R_ned_frd = utilities::R_ned_enu*R_enu_flu*utilities::R_flu_frd;
+      Eigen::Vector3d eta_ned_frd = utilities::R2XYZ(R_ned_frd);
+      msg_ned.yaw = eta_ned_frd.y();
+
+      msg_ned.yawspeed = -msg_enu->yawspeed; //:)
+
+      msg_ned.timestamp = this->get_clock()->now().nanoseconds() / 1000;
+      trajectory_setpoint_pub_->publish(msg_ned);
+
+      // control mode 
+      px4_msgs::msg::OffboardControlMode msg_ctrl_mode;
+      msg_ctrl_mode.position = true;
+      msg_ctrl_mode.velocity = true;
+      msg_ctrl_mode.acceleration = true;
+      msg_ctrl_mode.attitude = true;
+      msg_ctrl_mode.body_rate = true;
+      msg_ctrl_mode.timestamp = this->get_clock()->now().nanoseconds() / 1000;
+      offboard_control_mode_pub_->publish(msg_ctrl_mode);
+
+    }
 
     void companion_odom_cb(const nav_msgs::msg::Odometry::UniquePtr msg){
 
@@ -235,7 +316,7 @@ class Px4TfPublisher : public rclcpp::Node
 
       Eigen::Matrix4d T_c_b = utilities::T_inverse(T_b_c);
       Eigen::Matrix4d T_o_b = T_o_c*T_c_b;   
-
+      
       utilities::Matrix6d cov_vel_c = utilities::cov_to_mat(ros_odom.pose.covariance);
       utilities::Matrix6d cov_vel_b = utilities::rotate_twist_cov(cov_vel_c, T_b_c);
 
@@ -394,12 +475,15 @@ class Px4TfPublisher : public rclcpp::Node
       };
 
       // Header
-      ros_odom.header.stamp = rclcpp::Time(px4_odom.timestamp); // TODO check timing conversion stuff
+      // ros_odom.header.stamp = rclcpp::Time(px4_odom.timestamp); // TODO check timing conversion stuff
+      ros_odom.header.stamp =this->get_clock()->now();
       ros_odom.header.frame_id = px4_odom_frame_id_;
       ros_odom.child_frame_id = "base_link";   
 
       return ros_odom;
     }
+
+    
 
     nav_msgs::msg::Odometry overwrite_covariance(nav_msgs::msg::Odometry ros_odom){
       double cov_lin = 0.1;
@@ -423,25 +507,6 @@ class Px4TfPublisher : public rclcpp::Node
       };
       return ros_odom;
     }
-
-    rclcpp::Subscription<px4_msgs::msg::VehicleOdometry>::SharedPtr vehicle_odometry_out_sub_;
-    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr px4_odometry_out_pub_;
-    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr test_pub_;
-
-    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr companion_odometry_sub_;
-    rclcpp::Publisher<px4_msgs::msg::VehicleOdometry>::SharedPtr vehicle_visual_odometry_pub_;
-
-    std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
-    std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
-
-    //params
-    std::string px4_odom_frame_id_;
-    bool publish_tf_;
-    bool feed_twist_to_px4_;
-    bool odom_child_is_not_base_link_;
-    bool odom_parent_is_not_map_;
-
 
 };
 

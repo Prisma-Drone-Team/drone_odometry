@@ -29,9 +29,11 @@ def generate_launch_description():
                     'odom_parent_is_not_map': False,
                 }
             ],
-            # remappings=[
-            #     ('/odometry/filtered', '/px4/odometry/out')
-            # ],
+            remappings=[
+                # ('/odometry/filtered', '/px4/odometry/out')
+                # ('/fmu/in/vehicle_visual_odometry', '/fmu/in/vehicle_mocap_odometry') NON FUNZIONA
+                
+            ],
             arguments=['--log-level', 'info']
         )
 

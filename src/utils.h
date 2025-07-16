@@ -574,6 +574,14 @@ namespace utilities{
 		return Tinv;
 	}
 
+	inline Matrix4d T_clear_translation(Matrix4d T){
+		
+		// T.block(0,0,3,3); //Rinv
+		T.block(0,3,3,1) = Vector3d::Zero().transpose(); //col vect
+
+		return T;
+	}
+
 	
 	
 	inline Vector6d rotate_twist(const Vector6d &v_a_a, const Matrix4d & T_b_a){
