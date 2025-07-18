@@ -13,6 +13,7 @@ find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(trajectory_msgs REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
@@ -36,12 +37,36 @@ ament_target_dependencies(
   "geometry_msgs"
   "sensor_msgs"
   "nav_msgs"
+  "trajectory_msgs"
   "px4_msgs"
   "tf2"
   "tf2_ros"
   "px4_ros_com"
 )
 install(TARGETS px4_tf_pub
+  DESTINATION lib/${PROJECT_NAME})
+
+# executable trajectory_test
+add_executable(trajectory_test src/trajectory_test.cpp)
+target_include_directories(trajectory_test PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_compile_features(trajectory_test PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
+ament_target_dependencies(
+  trajectory_test
+  "rclcpp"
+  "builtin_interfaces"
+  "std_msgs"
+  "geometry_msgs"
+  "sensor_msgs"
+  "nav_msgs"
+  "trajectory_msgs"
+  "px4_msgs"
+  "tf2"
+  "tf2_ros"
+  "px4_ros_com"
+)
+install(TARGETS trajectory_test
   DESTINATION lib/${PROJECT_NAME})
 
 # executable odom_derivative

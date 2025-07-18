@@ -9,6 +9,8 @@
 
 #include "px4_ros_com/frame_transforms.h"
 #include "nav_msgs/msg/odometry.hpp"
+#include "trajectory_msgs/msg/multi_dof_joint_trajectory_point.hpp"
+
 #include <Eigen/Core>
 #include "utils.h"
 
@@ -32,7 +34,7 @@ class Px4TfPublisher : public rclcpp::Node
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr companion_odometry_sub_;
     rclcpp::Publisher<px4_msgs::msg::VehicleOdometry>::SharedPtr vehicle_visual_odometry_pub_;
 
-    rclcpp::Subscription<px4_msgs::msg::TrajectorySetpoint>::SharedPtr trajectory_setpoint_ros_sub_;
+    rclcpp::Subscription<trajectory_msgs::msg::MultiDOFJointTrajectoryPoint>::SharedPtr trajectory_setpoint_ros_sub_;
     rclcpp::Publisher<px4_msgs::msg::TrajectorySetpoint>::SharedPtr trajectory_setpoint_pub_;
     rclcpp::Publisher<px4_msgs::msg::OffboardControlMode>::SharedPtr offboard_control_mode_pub_;
     rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr vehicle_command_pub_;  
@@ -78,7 +80,7 @@ class Px4TfPublisher : public rclcpp::Node
       companion_odometry_sub_ = this->create_subscription<nav_msgs::msg::Odometry>("/odometry/filtered", qos, std::bind(&Px4TfPublisher::companion_odom_cb, this, _1));
       vehicle_visual_odometry_pub_ = this->create_publisher<px4_msgs::msg::VehicleOdometry>("/fmu/in/vehicle_visual_odometry", qos); // /fmu/in/vehicle_mocap_odometry or /fmu/in/vehicle_visual_odometry
       
-      trajectory_setpoint_ros_sub_ = this->create_subscription<px4_msgs::msg::TrajectorySetpoint>("/px4/trajectory_setpoint_enu", qos, std::bind(&Px4TfPublisher::trajectory_setpoint_ros_cb, this, _1));
+      trajectory_setpoint_ros_sub_ = this->create_subscription<trajectory_msgs::msg::MultiDOFJointTrajectoryPoint>("/px4/trajectory_setpoint_enu", qos, std::bind(&Px4TfPublisher::trajectory_setpoint_ros_cb, this, _1));
       trajectory_setpoint_pub_ = this->create_publisher<px4_msgs::msg::TrajectorySetpoint>("/fmu/in/trajectory_setpoint", qos);
       offboard_control_mode_pub_ = this->create_publisher<px4_msgs::msg::OffboardControlMode>("/fmu/in/offboard_control_mode", qos);
       vehicle_command_pub_ = this->create_publisher<px4_msgs::msg::VehicleCommand>("/fmu/in/vehicle_command", qos);
@@ -99,42 +101,43 @@ class Px4TfPublisher : public rclcpp::Node
 
   private:
 
-    void trajectory_setpoint_ros_cb(const px4_msgs::msg::TrajectorySetpoint::UniquePtr msg_enu){
+    void trajectory_setpoint_ros_cb(const trajectory_msgs::msg::MultiDOFJointTrajectoryPoint::UniquePtr msg_enu){
       //setpoint
       px4_msgs::msg::TrajectorySetpoint msg_ned;
       Eigen::Vector3d x_enu;
       Eigen::Vector3d x_ned;
 
-      x_enu << msg_enu->position[0], msg_enu->position[1], msg_enu->position[2];
+      x_enu << msg_enu->transforms[0].translation.x, msg_enu->transforms[0].translation.y, msg_enu->transforms[0].translation.z;
       x_ned = utilities::R_ned_enu*x_enu;
       msg_ned.position[0] = x_ned.x();
       msg_ned.position[1] = x_ned.y();
       msg_ned.position[2] = x_ned.z();
 
-      x_enu << msg_enu->velocity[0], msg_enu->velocity[1], msg_enu->velocity[2];
+      x_enu << msg_enu->velocities[0].linear.x, msg_enu->velocities[0].linear.y, msg_enu->velocities[0].linear.z;
       x_ned = utilities::R_ned_enu*x_enu;
       msg_ned.velocity[0] = x_ned.x();
       msg_ned.velocity[1] = x_ned.y();
       msg_ned.velocity[2] = x_ned.z();
 
-      x_enu << msg_enu->acceleration[0], msg_enu->acceleration[1], msg_enu->acceleration[1];
+      x_enu << msg_enu->accelerations[0].linear.x, msg_enu->accelerations[0].linear.y, msg_enu->accelerations[0].linear.z;
       x_ned = utilities::R_ned_enu*x_enu;
       msg_ned.acceleration[0] = x_ned.x();
       msg_ned.acceleration[1] = x_ned.y();
       msg_ned.acceleration[2] = x_ned.z();
 
-      x_enu << msg_enu->jerk[0], msg_enu->jerk[1], msg_enu->jerk[2];
-      x_ned = utilities::R_ned_enu*x_enu;
-      msg_ned.jerk[0] = x_ned.x();
-      msg_ned.jerk[1] = x_ned.y();
-      msg_ned.jerk[2] = x_ned.z();
+      // x_enu << msg_enu->jerk[0], msg_enu->jerk[1], msg_enu->jerk[2];
+      // x_ned = utilities::R_ned_enu*x_enu;
+      // msg_ned.jerk[0] = x_ned.x();
+      // msg_ned.jerk[1] = x_ned.y();
+      // msg_ned.jerk[2] = x_ned.z();
 
-      Eigen::Matrix3d R_enu_flu = utilities::XYZ2R(Eigen::Vector3d(0, msg_enu->yaw, 0));
+      // Eigen::Matrix3d R_enu_flu = utilities::XYZ2R(Eigen::Vector3d(0, msg_enu->yaw, 0));
+      Eigen::Matrix3d R_enu_flu = utilities::QuatToMat(Eigen::Vector4d( msg_enu->transforms[0].rotation.w, msg_enu->transforms[0].rotation.x, msg_enu->transforms[0].rotation.y, msg_enu->transforms[0].rotation.z));
       Eigen::Matrix3d R_ned_frd = utilities::R_ned_enu*R_enu_flu*utilities::R_flu_frd;
       Eigen::Vector3d eta_ned_frd = utilities::R2XYZ(R_ned_frd);
       msg_ned.yaw = eta_ned_frd.y();
 
-      msg_ned.yawspeed = -msg_enu->yawspeed; //:)
+      msg_ned.yawspeed = -msg_enu->velocities[0].angular.z;; //:)
 
       msg_ned.timestamp = this->get_clock()->now().nanoseconds() / 1000;
       trajectory_setpoint_pub_->publish(msg_ned);
