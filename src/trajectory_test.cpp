@@ -1,13 +1,14 @@
 #include <memory>
 
 #include "rclcpp/rclcpp.hpp"
+// #include "boost/thread.hpp"
+#include <thread>
 #include "std_msgs/msg/string.hpp"
 #include <px4_msgs/msg/vehicle_odometry.hpp>
 #include <px4_msgs/msg/trajectory_setpoint.hpp>
 #include <px4_msgs/msg/offboard_control_mode.hpp>
 #include <px4_msgs/msg/vehicle_command.hpp>
 
-#include "px4_ros_com/frame_transforms.h"
 #include "nav_msgs/msg/odometry.hpp"
 #include "trajectory_msgs/msg/multi_dof_joint_trajectory_point.hpp"
 
@@ -26,8 +27,7 @@ using std::placeholders::_1;
 class TrajectoryTest : public rclcpp::Node
 {
   private:
-    
-    
+        
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Publisher<trajectory_msgs::msg::MultiDOFJointTrajectoryPoint>::SharedPtr trajectory_setpoint_ros_pub_;
 
@@ -48,7 +48,21 @@ class TrajectoryTest : public rclcpp::Node
     utilities::Vector6d traj_goal_pose_; /*measured pose in world frame*/
    
     bool first_odom_pose_;
+    bool offboard_enabled_;
+
+    double traj_goal_time_;
+    bool new_traj_;
+    bool new_traj_is_takeoff_;
+    bool traj_ended_;
     bool abort_trajectory_;
+    bool traj_aborted_;
+
+    double par_vel_angular_;
+    double par_vel_linear_;
+    double par_t_min_traj_;
+
+    std::thread traj_planner_th;
+    std::thread user_menu_th_;
 
   public:
     TrajectoryTest(): Node("trajectory_test"){
@@ -56,7 +70,7 @@ class TrajectoryTest : public rclcpp::Node
       rmw_qos_profile_t qos_profile = rmw_qos_profile_sensor_data;
       auto qos = rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 5), qos_profile);
 
-      odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>("/odom", qos, std::bind(&TrajectoryTest::odom_cb, this, _1));
+      odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>("/px4/odometry/out", qos, std::bind(&TrajectoryTest::odom_cb, this, _1));
       trajectory_setpoint_ros_pub_ = this->create_publisher<trajectory_msgs::msg::MultiDOFJointTrajectoryPoint>("/px4/trajectory_setpoint_enu", qos);
 
       tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
@@ -74,8 +88,20 @@ class TrajectoryTest : public rclcpp::Node
       traj_msg_.velocities.push_back(velocity);
       traj_msg_.accelerations.push_back(acceleration);
 
-      first_odom_pose_ = false;
-      abort_trajectory_ = false;
+    //   first_odom_pose_ = false;
+    //   abort_trajectory_ = false;
+
+      par_vel_angular_ = 0.1; //TODO should be params
+      par_vel_linear_ = 0.3;
+      par_t_min_traj_ = 0.1;
+
+    //   boost::thread traj_plan_t( &TrajectoryTest::traj_planner_task, this);
+
+      traj_planner_th = std::thread(&TrajectoryTest::traj_planner_task, this);
+
+      user_menu_th_ = std::thread(&TrajectoryTest::user_menu_task, this);
+
+    //   user_menu_task
       
     }
 
@@ -163,7 +189,7 @@ class TrajectoryTest : public rclcpp::Node
             RCLCPP_ERROR(this->get_logger(), "trajectory aborted");
             ref_traj_vel_<<0,0,0,0;
             ref_traj_acc_<<0,0,0,0;
-            // traj_aborted_ = true;
+            traj_aborted_ = true;
         }
     }
 
@@ -171,39 +197,39 @@ class TrajectoryTest : public rclcpp::Node
     void traj_planner_task(void){
 
         rclcpp::Rate rate(50.0); //NB prima era 1Hz
-        while(! _first_meas_pose){
-            rclcpp::spin_some();
+        while(! first_odom_pose_){
             rate.sleep();
         }
+        RCLCPP_INFO(this->get_logger(), "[traj_planner_th] got first odom pose");
     
         traj_aborted_ = false;
     
         while(! offboard_enabled_){
             traj_goal_pose_ = x_m_w_;
             traj_goal_time_ = 0;
-            ref_traj_pos_ <<_x_m_w(0), _x_m_w(1), _x_m_w(2), _x_m_w(5);
+            ref_traj_pos_ <<x_m_w_(0), x_m_w_(1), x_m_w_(2), x_m_w_(5);
             ref_traj_vel_ <<0,0,0,0;
             ref_traj_acc_ <<0,0,0,0;
             rate.sleep();
         }
-        _new_traj = false;
-        _new_traj_is_takeoff = false;
-        _traj_ended = true;
-        _traj_aborted = false;
+
+        new_traj_ = false;
+        traj_ended_ = true;
+        traj_aborted_ = false;
     
-        while(ros::ok()){
+        while(rclcpp::ok()){
     
-            if(! _offboard_enabled){ //TODO
-                _traj_goal_pose = _x_m_w;
-                _traj_goal_time = 0;
-                _ref_traj_pos <<_x_m_w(0), _x_m_w(1), _x_m_w(2), _x_m_w(5);
-                _ref_traj_vel <<0,0,0,0;
-                _ref_traj_acc <<0,0,0,0;
+            if(! offboard_enabled_){ //TODO
+                traj_goal_pose_ = x_m_w_;
+                traj_goal_time_ = 0;
+                ref_traj_pos_ <<x_m_w_(0), x_m_w_(1), x_m_w_(2), x_m_w_(5);
+                ref_traj_vel_ <<0,0,0,0;
+                ref_traj_acc_ <<0,0,0,0;
                 rate.sleep();
             }
             
             
-            if(_new_traj){
+            if(new_traj_){
                 new_traj_ = false;
                 traj_ended_ = false;
                 abort_trajectory_ = false;
@@ -213,19 +239,115 @@ class TrajectoryTest : public rclcpp::Node
                 double acc_ff = 0.00;
                 //start_point <<_x_m_w(0), _x_m_w(1), _x_m_w(2), _x_m_w(5);
                 start_point = ref_traj_pos_;  //TODO test run from prev trajectory end ( while in offboard)
-                else{
-                    traj_compute(start_point, Eigen::Vector4d(_traj_goal_pose(0),_traj_goal_pose(1),_traj_goal_pose(2),_traj_goal_pose(5)), traj_goal_time_,vel_ff, acc_ff);
-                    traj_ended_ = true;
-                }
+                
+                traj_compute(start_point, Eigen::Vector4d(traj_goal_pose_(0),traj_goal_pose_(1),traj_goal_pose_(2),traj_goal_pose_(5)), traj_goal_time_,vel_ff, acc_ff);
+                traj_ended_ = true;
                 
             }
             rate.sleep();
         }
     
     }
+
+    int plan_new_trajectory( Eigen::Vector3d pos_goal, double yaw_goal,double vel_linear){
+        if(traj_ended_){
+            Eigen::Vector3d pos_now;
+            //pos_now <<_x_m_w(0), _x_m_w(1), _x_m_w(2);
+            pos_now <<ref_traj_pos_(0),ref_traj_pos_(1),ref_traj_pos_(2);
+            //double yaw_now =  _x_m_w(5);
+            double yaw_now = ref_traj_pos_(3);
+            double delta_t_lin = (pos_goal - pos_now).norm()/vel_linear;
+            //double delta_t_ang = fabs(yaw_goal -yaw_now)/_approach_vel_angular;  
+            double delta_t_ang = fabs(utilities::angleError(yaw_goal,yaw_now))/par_vel_angular_; 
+            //cout<<"linear time: "<<delta_t_lin<<endl;
+            //cout<<"ang time: "<< delta_t_ang<<endl;
+            traj_goal_time_ = std::max(par_t_min_traj_,( delta_t_lin > delta_t_ang) ? delta_t_lin : delta_t_ang);
+    
+            //cout<<"traj time: "<< _traj_goal_time<<endl;
+            RCLCPP_INFO(this->get_logger(),"traj time: %f",traj_goal_time_);
+            traj_goal_pose_(0) = pos_goal(0);
+            traj_goal_pose_(1) = pos_goal(1);
+            traj_goal_pose_(2) = pos_goal(2);
+            traj_goal_pose_(5) = yaw_goal;
+            new_traj_ = true;
+            traj_ended_ = false;
+            abort_trajectory_ = false;
+            traj_aborted_ = false;
+            return 1;
+        }
+        else return -1;
+    }
+
+
+    void go_offboard(){   //TODO call px4 msgs
+        RCLCPP_INFO(this->get_logger(),"going offboard");
+        offboard_enabled_= true;
+    }
+
+    void user_menu_task() {
+        rclcpp::Rate rate(1);  // Frequenza 1 Hz
+        char input = 0;
+    
+        while ( rclcpp::ok()) {
+            // Stampa il menu
+            std::cout << "\n=== MENU PRINCIPALE ===" << std::endl;
+            std::cout << "g: Inserisci nuovo goal (x, y, z, yaw)" << std::endl;
+            std::cout << "o: Attiva modalità offboard" << std::endl;
+            std::cout << "q: Esci dal programma" << std::endl;
+            std::cout << "Scelta: ";
+            std::cout.flush();  // Forza l'output
+    
+            // Lettura input non bloccante
+            if (std::cin.peek() != EOF) {
+                std::cin >> input;
+                
+                switch(input) {
+                    case 'g': {
+                        Eigen::Vector3d xyz_goal;
+                        double yaw_goal;
+                        std::cout << "Inserisci x y z yaw: ";
+                        if (std::cin >> xyz_goal[0] >> xyz_goal[1] >> xyz_goal[2] >> yaw_goal) {
+                            std::cout << "Nuovo goal impostato: "
+                                      << xyz_goal[0] << ", "
+                                      << xyz_goal[1] << ", "
+                                      << xyz_goal[2] << ", "
+                                      << yaw_goal << std::endl;
+    
+                            plan_new_trajectory(xyz_goal,yaw_goal,par_vel_linear_);
+                        } else {
+                            std::cin.clear();  // Reset errori di input
+                            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+                            std::cout << "Input non valido!" << std::endl;
+                        }
+                        break;
+                    }
+                    case 'o':
+                        std::cout << "going offboard..." << std::endl;
+                        go_offboard();
+                        break;
+                    case 'q':
+                        std::cout << "Uscita richiesta..." << std::endl;
+                        break;
+                    default:
+                        std::cout << "Comando non riconosciuto!" << std::endl;
+                        break;
+                }
+                
+                // Pulisce il buffer di input
+                std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            }
+            
+            rate.sleep();  // Mantiene la frequenza 1Hz
+        }
+    }
    
 
 };
+
+
+
+
+
 
 int main(int argc, char * argv[])
 {

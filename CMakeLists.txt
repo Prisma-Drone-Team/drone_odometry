@@ -20,8 +20,13 @@ find_package(tf2_ros REQUIRED)
 find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(fmt REQUIRED)
+# find_package(Boost REQUIRED COMPONENTS
+#   chrono
+# 	system 
+# 	thread 
+# 	program_options
+# )
 # find_package(px4_ros_com REQUIRED)
-
 # find_package(Sophus REQUIRED)
 
 # executable px4_tf_pub
@@ -48,27 +53,27 @@ install(TARGETS px4_tf_pub
   DESTINATION lib/${PROJECT_NAME})
 
 # executable trajectory_test
-# add_executable(trajectory_test src/trajectory_test.cpp)
-# target_include_directories(trajectory_test PUBLIC
-#   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-#   $<INSTALL_INTERFACE:include>)
-# target_compile_features(trajectory_test PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
-# ament_target_dependencies(
-#   trajectory_test
-#   "rclcpp"
-#   "builtin_interfaces"
-#   "std_msgs"
-#   "geometry_msgs"
-#   "sensor_msgs"
-#   "nav_msgs"
-#   "trajectory_msgs"
-#   "px4_msgs"
-#   "tf2"
-#   "tf2_ros"
-#   "px4_ros_com"
-# )
-# install(TARGETS trajectory_test
-#   DESTINATION lib/${PROJECT_NAME})
+add_executable(trajectory_test src/trajectory_test.cpp)
+target_include_directories(trajectory_test PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_compile_features(trajectory_test PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
+ament_target_dependencies(
+  trajectory_test
+  "rclcpp"
+  "builtin_interfaces"
+  "std_msgs"
+  "geometry_msgs"
+  "sensor_msgs"
+  "nav_msgs"
+  "trajectory_msgs"
+  "px4_msgs"
+  "tf2"
+  "tf2_ros"
+  "Eigen3"
+)
+install(TARGETS trajectory_test
+  DESTINATION lib/${PROJECT_NAME})
 
 # executable odom_derivative
 # add_executable(odom_derivative src/odom_derivative.cpp)
