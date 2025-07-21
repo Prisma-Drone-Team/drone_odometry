@@ -7,7 +7,6 @@
 #include <px4_msgs/msg/offboard_control_mode.hpp>
 #include <px4_msgs/msg/vehicle_command.hpp>
 
-#include "px4_ros_com/frame_transforms.h"
 #include "nav_msgs/msg/odometry.hpp"
 #include "trajectory_msgs/msg/multi_dof_joint_trajectory_point.hpp"
 
@@ -20,7 +19,7 @@
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2_ros/transform_broadcaster.h"
 
-using namespace px4_ros_com::frame_transforms; //TODO remove
+// using namespace px4_ros_com::frame_transforms; //TODO remove
 
 using std::placeholders::_1;
 

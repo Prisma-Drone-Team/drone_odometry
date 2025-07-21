@@ -197,8 +197,8 @@ class TrajectoryTest : public rclcpp::Node
                 _traj_goal_pose = _x_m_w;
                 _traj_goal_time = 0;
                 _ref_traj_pos <<_x_m_w(0), _x_m_w(1), _x_m_w(2), _x_m_w(5);
-                _ref_traj_vel<<0,0,0,0;
-                _ref_traj_acc<<0,0,0,0;
+                _ref_traj_vel <<0,0,0,0;
+                _ref_traj_acc <<0,0,0,0;
                 rate.sleep();
             }
             
