@@ -63,15 +63,15 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 {
-                    'px4_odom_frame_id': "zed_front_odom",
+                    'px4_odom_frame_id': "odom", #frame of published tf and odom msg
                     'publish_tf': True,
                     'feed_twist_to_px4': True,
-                    'odom_parent_is_not_map': False, #new idea
-                    'odom_child_is_not_base_link': True,
+                    'odom_parent_is_not_odom': True, #if vio odom msg parent is not odom, use tf to add offset
+                    'odom_child_is_not_base_link': True, #if vio odom msg child is not base_link, use tf to add offset
                 }
             ],
             remappings=[
-                ('/odometry/filtered', '/zed_front/zed_node/odom')
+                ('/odometry/filtered', '/zed_front/zed_node/odom') #vio pc odometry to feed into px4
             ],
             arguments=['--log-level', 'info']
         )  

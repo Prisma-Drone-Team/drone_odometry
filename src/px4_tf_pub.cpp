@@ -48,7 +48,7 @@ class Px4TfPublisher : public rclcpp::Node
     bool publish_tf_;
     bool feed_twist_to_px4_;
     bool odom_child_is_not_base_link_;
-    bool odom_parent_is_not_map_;
+    bool odom_parent_is_not_odom_;
 
   public:
     Px4TfPublisher(): Node("px4_tf_pub"){
@@ -66,8 +66,8 @@ class Px4TfPublisher : public rclcpp::Node
       this->declare_parameter<bool>("odom_child_is_not_base_link", false);
       odom_child_is_not_base_link_ = this->get_parameter("odom_child_is_not_base_link").as_bool();
       
-      this->declare_parameter<bool>("odom_parent_is_not_map", false);
-      odom_parent_is_not_map_ = this->get_parameter("odom_parent_is_not_map").as_bool();
+      this->declare_parameter<bool>("odom_parent_is_not_odom", false);
+      odom_parent_is_not_odom_ = this->get_parameter("odom_parent_is_not_odom").as_bool();
 
       rmw_qos_profile_t qos_profile = rmw_qos_profile_sensor_data;
       auto qos = rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 5), qos_profile);
@@ -132,10 +132,13 @@ class Px4TfPublisher : public rclcpp::Node
       // msg_ned.jerk[2] = x_ned.z();
 
       // Eigen::Matrix3d R_enu_flu = utilities::XYZ2R(Eigen::Vector3d(0, msg_enu->yaw, 0));
-      Eigen::Matrix3d R_enu_flu = utilities::QuatToMat(Eigen::Vector4d( msg_enu->transforms[0].rotation.w, msg_enu->transforms[0].rotation.x, msg_enu->transforms[0].rotation.y, msg_enu->transforms[0].rotation.z));
+      Eigen::Vector4d q_enu( msg_enu->transforms[0].rotation.w, msg_enu->transforms[0].rotation.x, msg_enu->transforms[0].rotation.y, msg_enu->transforms[0].rotation.z);
+      Eigen::Matrix3d R_enu_flu = utilities::QuatToMat(q_enu);
       Eigen::Matrix3d R_ned_frd = utilities::R_ned_enu*R_enu_flu*utilities::R_flu_frd;
       Eigen::Vector3d eta_ned_frd = utilities::R2XYZ(R_ned_frd);
-      msg_ned.yaw = eta_ned_frd.y();
+      msg_ned.yaw = eta_ned_frd.z();
+      // std::cout<<"\n-----\n"<<"q_enu= "<<q_enu<<"\neta_ned= "<<eta_ned_frd<<"\n";
+
 
       msg_ned.yawspeed = -msg_enu->velocities[0].angular.z;; //:)
 
@@ -179,12 +182,12 @@ class Px4TfPublisher : public rclcpp::Node
       nav_msgs::msg::Odometry odom = *msg;
 
       if (odom_child_is_not_base_link_){
-        odom = rotate_ros_odom_child(odom); //change from  child to base_link
+        odom = rotate_ros_odom_child(odom); //change from child to /base_link
         // test_pub_->publish(odom);
       }
 
-      if (odom_parent_is_not_map_){
-        odom = rotate_ros_odom_parent(odom); //change wrt odom to wrt map
+      if (odom_parent_is_not_odom_){
+        odom = rotate_ros_odom_parent(odom); //change wrt parent to wrt /odom
         // test_pub_->publish(odom);
       }
 
@@ -348,7 +351,7 @@ class Px4TfPublisher : public rclcpp::Node
       Eigen::Matrix4d T_m_o;
       
       try {
-        auto Tf_m_o = tf_buffer_->lookupTransform("map", ros_odom.header.frame_id, rclcpp::Time(0),100ms);
+        auto Tf_m_o = tf_buffer_->lookupTransform("odom", ros_odom.header.frame_id, rclcpp::Time(0),100ms);
         
         T_m_o = utilities::T_from_tf(Tf_m_o); // TODO make global and do only until first odom
         // cout<<"get TF base_link ->child : \n"<<T_b_c<<"\n\n";

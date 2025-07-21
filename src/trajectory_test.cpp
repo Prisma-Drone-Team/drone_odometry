@@ -40,13 +40,15 @@ class TrajectoryTest : public rclcpp::Node
     
     trajectory_msgs::msg::MultiDOFJointTrajectoryPoint traj_msg_;
 
-    utilities::Vector6d _x_m_w; /*measured pose in world frame*/
+    utilities::Vector6d x_m_w_; /*measured pose in world frame*/
     //trajectory planner
-    Eigen::Vector4d _ref_traj_pos; /*x y z yaw*/ //TODO add pitch
-    Eigen::Vector4d _ref_traj_vel;
-    Eigen::Vector4d _ref_traj_acc;
-    utilities::Vector6d _traj_goal_pose; /*measured pose in world frame*/
+    Eigen::Vector4d ref_traj_pos_; /*x y z yaw*/ //TODO add pitch
+    Eigen::Vector4d ref_traj_vel_;
+    Eigen::Vector4d ref_traj_acc_;
+    utilities::Vector6d traj_goal_pose_; /*measured pose in world frame*/
    
+    bool first_odom_pose_;
+    bool abort_trajectory_;
 
   public:
     TrajectoryTest(): Node("trajectory_test"){
@@ -60,8 +62,9 @@ class TrajectoryTest : public rclcpp::Node
       tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
       tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
       tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
-
-      sp_pub_timer_ = this->create_wall_timer(20ms, std::bind(&TrajectoryTest::sp_pub_timer_cb, this));
+        
+      //TODO wait here for first odom ? 
+      sp_pub_timer_ = this->create_wall_timer(20ms, std::bind(&TrajectoryTest::sp_pub_timer_cb, this)); //loop @ 50 Hz
 
       //prepare message structure
       geometry_msgs::msg::Transform transform;
@@ -70,6 +73,9 @@ class TrajectoryTest : public rclcpp::Node
       traj_msg_.transforms.push_back(transform);
       traj_msg_.velocities.push_back(velocity);
       traj_msg_.accelerations.push_back(acceleration);
+
+      first_odom_pose_ = false;
+      abort_trajectory_ = false;
       
     }
 
@@ -77,31 +83,146 @@ class TrajectoryTest : public rclcpp::Node
 
     void odom_cb(nav_msgs::msg::Odometry::UniquePtr msg){
 
+        Eigen::Vector3d rpy = utilities::R2XYZ ( utilities::QuatToMat ( Eigen::Vector4d( msg->pose.pose.orientation.w,  msg->pose.pose.orientation.x,  msg->pose.pose.orientation.y,  msg->pose.pose.orientation.z) ) );
+        x_m_w_ << msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z,rpy(0),rpy(1),rpy(2);
+        first_odom_pose_ = true;
+
     }
 
-    void sp_pub_timer_cb(){
+    void sp_pub_timer_cb(){ //loop @ 50 Hz
       
-      traj_msg_.transforms[0].translation.x = 1; 
-      traj_msg_.transforms[0].translation.y = 2; 
-      traj_msg_.transforms[0].translation.z = 3;
+        traj_msg_.transforms[0].translation.x = ref_traj_pos_(0); 
+        traj_msg_.transforms[0].translation.y = ref_traj_pos_(1); 
+        traj_msg_.transforms[0].translation.z = ref_traj_pos_(2);
+            
+        Eigen::Vector4d ref_q = utilities::rot2quat(utilities::XYZ2R(Eigen::Vector3d(0.0, 0.0, ref_traj_pos_(3))));
 
-      traj_msg_.transforms[0].rotation.w = 0.0;
-      traj_msg_.transforms[0].rotation.x = 0.0;
-      traj_msg_.transforms[0].rotation.y = 0.0;
-      traj_msg_.transforms[0].rotation.z = 0.0;
+        traj_msg_.transforms[0].rotation.w = ref_q(0);
+        traj_msg_.transforms[0].rotation.x = ref_q(1);
+        traj_msg_.transforms[0].rotation.y = ref_q(2);
+        traj_msg_.transforms[0].rotation.z = ref_q(3);
 
-      traj_msg_.velocities[0].linear.x = 0.0; 
-      traj_msg_.velocities[0].linear.y = 0.0; 
-      traj_msg_.velocities[0].linear.z = 0.0;
-      traj_msg_.velocities[0].angular.z = 0.0;
+        traj_msg_.velocities[0].linear.x = ref_traj_vel_(0); 
+        traj_msg_.velocities[0].linear.y = ref_traj_vel_(1); 
+        traj_msg_.velocities[0].linear.z = ref_traj_vel_(2);
+        traj_msg_.velocities[0].angular.z = ref_traj_vel_(3);
 
-      traj_msg_.accelerations[0].linear.x = 0.1; 
-      traj_msg_.accelerations[0].linear.y = 0.2; 
-      traj_msg_.accelerations[0].linear.z = 0.3;
+        traj_msg_.accelerations[0].linear.x = ref_traj_acc_(0); 
+        traj_msg_.accelerations[0].linear.y = ref_traj_acc_(1); 
+        traj_msg_.accelerations[0].linear.z = ref_traj_acc_(2);
+
+
+        // if(_open_x_pos_loop){
+        //     traj_msg_.transforms[0].translation.x = _x_m_w(0);
+        //     //TBD
+        // }
+
+
       trajectory_setpoint_ros_pub_->publish(traj_msg_);
 
     }
 
+
+    void traj_compute(Eigen::Vector4d p_i, Eigen::Vector4d p_f,double T,double vel_i_ff =0.0, double acc_i_ff =0.0){
+        rclcpp::Rate rate(100.0);
+        double dt = 1.0/100.0;
+        Eigen::Matrix<double,6,6> A;
+        Vector4d e = p_f-p_i;
+        e(3) = utilities::angleError(p_f(3),p_i(3));
+        double s_f = e.norm(); //arclength;
+        Eigen::VectorXd b(6);
+        b << 0.0, vel_i_ff, acc_i_ff, s_f, 0.0, 0.0; //qi qi_d qi_dd qf qf_d qf_dd : initial final pos vel acc
+        A << 0,           0,           0,          0,        0,  1,
+             0,           0,           0,          0,        1,  0,
+             0,           0,           0,          1,        0,  0,
+             pow(T,5),    pow(T,4),    pow(T,3),   pow(T,2), T,  1,
+             5*pow(T,4),  4*pow(T,3),  3*pow(T,2), 2*T,      1,  0,
+             20*pow(T,3), 12*pow(T,2), 6*T,        1,        0,  0;
+     
+        Eigen::VectorXd x = A.inverse()*b;
+        double s, s_d, s_dd;
+        double t = 0.0;
+        int N = T/dt;
+        int i =0;
+        // double t_0 =ros::Time::now().toSec();
+        while(rclcpp::ok() && i <=N && !abort_trajectory_){
+            //t = ros::Time::now().toSec()-t_0;
+            s    = x(0)*pow(t,5)    +x(1)*pow(t,4)    +x(2)*pow(t,3)   +x(3)*pow(t,2) +x(4)*t +x(5);
+            s_d  = x(0)*5*pow(t,4)  +x(1)*4*pow(t,3)  +x(2)*3*pow(t,2) +x(3)*2*t      +x(4);
+            s_dd = x(0)*20*pow(t,3) +x(1)*12*pow(t,2) +x(2)*6*t        +x(3);
+            
+            ref_traj_pos_ = p_i + s*e/s_f;
+            ref_traj_vel_ = s_d*e/s_f;
+            ref_traj_acc_ = s_dd*e/s_f;
+
+            i++;
+            t+=dt;
+            rate.sleep();
+        }   
+        if(abort_trajectory_){
+            RCLCPP_ERROR(this->get_logger(), "trajectory aborted");
+            ref_traj_vel_<<0,0,0,0;
+            ref_traj_acc_<<0,0,0,0;
+            // traj_aborted_ = true;
+        }
+    }
+
+
+    void traj_planner_task(void){
+
+        rclcpp::Rate rate(50.0); //NB prima era 1Hz
+        while(! _first_meas_pose){
+            rclcpp::spin_some();
+            rate.sleep();
+        }
+    
+        traj_aborted_ = false;
+    
+        while(! offboard_enabled_){
+            traj_goal_pose_ = x_m_w_;
+            traj_goal_time_ = 0;
+            ref_traj_pos_ <<_x_m_w(0), _x_m_w(1), _x_m_w(2), _x_m_w(5);
+            ref_traj_vel_ <<0,0,0,0;
+            ref_traj_acc_ <<0,0,0,0;
+            rate.sleep();
+        }
+        _new_traj = false;
+        _new_traj_is_takeoff = false;
+        _traj_ended = true;
+        _traj_aborted = false;
+    
+        while(ros::ok()){
+    
+            if(! _offboard_enabled){ //TODO
+                _traj_goal_pose = _x_m_w;
+                _traj_goal_time = 0;
+                _ref_traj_pos <<_x_m_w(0), _x_m_w(1), _x_m_w(2), _x_m_w(5);
+                _ref_traj_vel<<0,0,0,0;
+                _ref_traj_acc<<0,0,0,0;
+                rate.sleep();
+            }
+            
+            
+            if(_new_traj){
+                new_traj_ = false;
+                traj_ended_ = false;
+                abort_trajectory_ = false;
+                traj_aborted_ = false;
+                Eigen::Vector4d start_point;
+                double vel_ff = 0.00;
+                double acc_ff = 0.00;
+                //start_point <<_x_m_w(0), _x_m_w(1), _x_m_w(2), _x_m_w(5);
+                start_point = ref_traj_pos_;  //TODO test run from prev trajectory end ( while in offboard)
+                else{
+                    traj_compute(start_point, Eigen::Vector4d(_traj_goal_pose(0),_traj_goal_pose(1),_traj_goal_pose(2),_traj_goal_pose(5)), traj_goal_time_,vel_ff, acc_ff);
+                    traj_ended_ = true;
+                }
+                
+            }
+            rate.sleep();
+        }
+    
+    }
    
 
 };
