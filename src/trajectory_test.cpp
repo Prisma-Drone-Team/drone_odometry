@@ -105,6 +105,9 @@ class TrajectoryTest : public rclcpp::Node
       
     }
 
+    
+
+
   private:
 
     void odom_cb(nav_msgs::msg::Odometry::UniquePtr msg){

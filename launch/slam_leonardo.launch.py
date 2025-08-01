@@ -76,11 +76,12 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 {
-                    'px4_odom_frame_id': "zed_front_odom",
+                    'px4_odom_frame_id': "odom",
                     'publish_tf': True,
                     'feed_twist_to_px4': True,
-                    'odom_parent_is_not_map': False, #new idea
                     'odom_child_is_not_base_link': True,
+                    'odom_parent_is_not_odom': True, 
+                    'vio_desired_parent_frame_id': "odom" # if odom_parent_is_not_odom is set to true, this frame is uset to compute offset for parent of odom to feed into px4
                 }
             ],
             remappings=[

@@ -43,11 +43,13 @@ class Px4TfPublisher : public rclcpp::Node
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
     // params
-    std::string px4_odom_frame_id_;
+    std::string px4_odom_frame_id_; //output odometry topic and tf tfame name
+    std::string vio_desired_parent_frame_id_; //input vio parent is trasformed loocking up to this frame and vio parent , should coincide with px4_odom_frame_id_
     bool publish_tf_;
     bool feed_twist_to_px4_;
     bool odom_child_is_not_base_link_;
     bool odom_parent_is_not_odom_;
+    
 
   public:
     Px4TfPublisher(): Node("px4_tf_pub"){
@@ -55,6 +57,9 @@ class Px4TfPublisher : public rclcpp::Node
       //read params
       this->declare_parameter<string>("px4_odom_frame_id", "odom"); //tf_pub_parent_frame (/odom if not slam, /map if slam) TBD
       px4_odom_frame_id_ = this->get_parameter("px4_odom_frame_id").as_string();
+
+      this->declare_parameter<string>("vio_desired_parent_frame_id", px4_odom_frame_id_); // used to lookup transoform in for parent vio offset should coincide with px4_odom_frame_id_
+      vio_desired_parent_frame_id_ = this->get_parameter("vio_desired_parent_frame_id").as_string();
 
       this->declare_parameter<bool>("publish_tf", false);
       publish_tf_ = this->get_parameter("publish_tf").as_bool();
@@ -82,7 +87,7 @@ class Px4TfPublisher : public rclcpp::Node
       trajectory_setpoint_ros_sub_ = this->create_subscription<trajectory_msgs::msg::MultiDOFJointTrajectoryPoint>("/px4/trajectory_setpoint_enu", qos, std::bind(&Px4TfPublisher::trajectory_setpoint_ros_cb, this, _1));
       trajectory_setpoint_pub_ = this->create_publisher<px4_msgs::msg::TrajectorySetpoint>("/fmu/in/trajectory_setpoint", qos);
       offboard_control_mode_pub_ = this->create_publisher<px4_msgs::msg::OffboardControlMode>("/fmu/in/offboard_control_mode", qos);
-      vehicle_command_pub_ = this->create_publisher<px4_msgs::msg::VehicleCommand>("/fmu/in/vehicle_command", qos);
+      // vehicle_command_pub_ = this->create_publisher<px4_msgs::msg::VehicleCommand>("/fmu/in/vehicle_command", qos);
 
       tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
       tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
@@ -345,12 +350,12 @@ class Px4TfPublisher : public rclcpp::Node
     nav_msgs::msg::Odometry rotate_ros_odom_parent(const  nav_msgs::msg::Odometry & ros_odom){
       //rotate ros odom parent frame to add offset from slam /map ->/odom , rotate also pose cov expressing in map frame, 
       //twist in wrt body frame so it will be not changed
-      nav_msgs::msg::Odometry ros_odom_out;
+      nav_msgs::msg::Odometry ros_odom_out = ros_odom;
 
       Eigen::Matrix4d T_m_o;
       
       try {
-        auto Tf_m_o = tf_buffer_->lookupTransform("odom", ros_odom.header.frame_id, rclcpp::Time(0),100ms);
+        auto Tf_m_o = tf_buffer_->lookupTransform(vio_desired_parent_frame_id_, ros_odom.header.frame_id, rclcpp::Time(0),100ms);
         
         T_m_o = utilities::T_from_tf(Tf_m_o); // TODO make global and do only until first odom
         // cout<<"get TF base_link ->child : \n"<<T_b_c<<"\n\n";
@@ -360,7 +365,7 @@ class Px4TfPublisher : public rclcpp::Node
       }
 
       if(T_m_o == Eigen::Matrix4d::Identity()){
-        RCLCPP_WARN(this->get_logger(), "tf map->odom is Identity");
+        RCLCPP_WARN(this->get_logger(), "tf %s->%s is Identity",vio_desired_parent_frame_id_.c_str(),ros_odom.header.frame_id.c_str());
       }
 
       
@@ -375,7 +380,7 @@ class Px4TfPublisher : public rclcpp::Node
 
       // Header
       ros_odom_out.header.stamp = this->get_clock()->now();
-      ros_odom_out.header.frame_id = "map";
+      ros_odom_out.header.frame_id = vio_desired_parent_frame_id_;
       ros_odom_out.child_frame_id = ros_odom.child_frame_id; 
 
       return ros_odom_out;

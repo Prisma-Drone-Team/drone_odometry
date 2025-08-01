@@ -27,6 +27,8 @@ def generate_launch_description():
                     'feed_twist_to_px4': True,
                     'odom_parent_is_not_odom': True, #if vio odom msg parent is not odom, use tf to add offset
                     'odom_child_is_not_base_link': True, #if vio odom msg child is not base_link, use tf to add offset
+                    'vio_desired_parent_frame_id': "odom" # if odom_parent_is_not_odom is set to true, this frame is uset to compute offset for parent of odom to feed into px4
+
                 }
             ],
             remappings=[
