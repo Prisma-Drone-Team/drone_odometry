@@ -9,6 +9,7 @@
 
 #include "nav_msgs/msg/odometry.hpp"
 #include "trajectory_msgs/msg/multi_dof_joint_trajectory_point.hpp"
+#include "geometry_msgs/msg/twist.hpp"
 
 #include <Eigen/Core>
 #include "utils.h"
@@ -34,6 +35,7 @@ class Px4TfPublisher : public rclcpp::Node
     rclcpp::Publisher<px4_msgs::msg::VehicleOdometry>::SharedPtr vehicle_visual_odometry_pub_;
 
     rclcpp::Subscription<trajectory_msgs::msg::MultiDOFJointTrajectoryPoint>::SharedPtr trajectory_setpoint_ros_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_ros_sub_;
     rclcpp::Publisher<px4_msgs::msg::TrajectorySetpoint>::SharedPtr trajectory_setpoint_pub_;
     rclcpp::Publisher<px4_msgs::msg::OffboardControlMode>::SharedPtr offboard_control_mode_pub_;
     rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr vehicle_command_pub_;  
@@ -85,6 +87,7 @@ class Px4TfPublisher : public rclcpp::Node
       vehicle_visual_odometry_pub_ = this->create_publisher<px4_msgs::msg::VehicleOdometry>("/fmu/in/vehicle_visual_odometry", qos); // /fmu/in/vehicle_mocap_odometry or /fmu/in/vehicle_visual_odometry
       
       trajectory_setpoint_ros_sub_ = this->create_subscription<trajectory_msgs::msg::MultiDOFJointTrajectoryPoint>("/px4/trajectory_setpoint_enu", qos, std::bind(&Px4TfPublisher::trajectory_setpoint_ros_cb, this, _1));
+      cmd_vel_ros_sub_ = this->create_subscription<geometry_msgs::msg::Twist>("/px4/cmd_vel", qos, std::bind(&Px4TfPublisher::cmd_vel_ros_cb, this, _1));
       trajectory_setpoint_pub_ = this->create_publisher<px4_msgs::msg::TrajectorySetpoint>("/fmu/in/trajectory_setpoint", qos);
       offboard_control_mode_pub_ = this->create_publisher<px4_msgs::msg::OffboardControlMode>("/fmu/in/offboard_control_mode", qos);
       // vehicle_command_pub_ = this->create_publisher<px4_msgs::msg::VehicleCommand>("/fmu/in/vehicle_command", qos);
@@ -104,6 +107,43 @@ class Px4TfPublisher : public rclcpp::Node
     }
 
   private:
+
+    void cmd_vel_ros_cb(const geometry_msgs::msg::Twist::UniquePtr msg_enu){
+      px4_msgs::msg::TrajectorySetpoint msg_ned;
+      Eigen::Vector3d x_enu;
+      Eigen::Vector3d x_ned;
+
+      msg_ned.position[0] = NAN;
+      msg_ned.position[1] = NAN;
+      msg_ned.position[2] = NAN;
+
+      x_enu << msg_enu->linear.x, msg_enu->linear.y, msg_enu->linear.z;
+      x_ned = utilities::R_ned_enu*x_enu;
+      msg_ned.velocity[0] = x_ned.x();
+      msg_ned.velocity[1] = x_ned.y();
+      msg_ned.velocity[2] = x_ned.z();
+
+      msg_ned.acceleration[0] = NAN;
+      msg_ned.acceleration[1] = NAN;
+      msg_ned.acceleration[2] = NAN;
+
+      msg_ned.yaw = NAN;
+      
+      msg_ned.yawspeed = -msg_enu->angular.z;; //:)
+
+      msg_ned.timestamp = this->get_clock()->now().nanoseconds() / 1000;
+      trajectory_setpoint_pub_->publish(msg_ned);
+
+      // control mode 
+      px4_msgs::msg::OffboardControlMode msg_ctrl_mode;
+      msg_ctrl_mode.position = false;
+      msg_ctrl_mode.velocity = true;
+      msg_ctrl_mode.acceleration = false;
+      msg_ctrl_mode.attitude = false;
+      msg_ctrl_mode.body_rate = true;
+      msg_ctrl_mode.timestamp = this->get_clock()->now().nanoseconds() / 1000;
+      offboard_control_mode_pub_->publish(msg_ctrl_mode);
+    }
 
     void trajectory_setpoint_ros_cb(const trajectory_msgs::msg::MultiDOFJointTrajectoryPoint::UniquePtr msg_enu){
       //setpoint
