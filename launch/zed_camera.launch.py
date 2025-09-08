@@ -149,7 +149,7 @@ def launch_setup(context, *args, **kwargs):
 
     # Camera configuration file
     config_camera_path = os.path.join(
-        get_package_share_directory('gz_drone_bringup'),   #CUSTOM
+        get_package_share_directory('drone_odometry2'),   #CUSTOM
         'config',
         camera_model_val + '.yaml'
     )
