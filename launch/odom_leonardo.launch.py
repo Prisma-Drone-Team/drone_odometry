@@ -20,7 +20,7 @@ def generate_launch_description():
     #     config = yaml.load(file, Loader=yaml.FullLoader)
     #     params = config['odom_republisher_simu']['ros__parameters'] 
 
-    zed_cam_launch_path = os.path.join(get_package_share_directory('drone_odometry2'), 'launch', 'zed_camera.launch.py')
+    zed_cam_launch_path = os.path.join(get_package_share_directory('drone_odometry'), 'launch', 'zed_camera.launch.py')
 
 
     return LaunchDescription([
@@ -57,7 +57,7 @@ def generate_launch_description():
         ),
 
         launch_ros.actions.Node(
-            package='drone_odometry2',
+            package='drone_odometry',
             executable='px4_tf_pub',
             name='px4_tf_pub',
             output='screen',

@@ -41,7 +41,7 @@ os.environ["RCUTILS_COLORIZED_OUTPUT"] = "1"
 
 # ZED Configurations to be loaded by ZED Node
 default_config_common = os.path.join(
-    get_package_share_directory('drone_odometry2'),  #CUSTOMIZED configuration in this pkg
+    get_package_share_directory('drone_odometry'),  #CUSTOMIZED configuration in this pkg
     'config',
     'common'
 )
@@ -149,7 +149,7 @@ def launch_setup(context, *args, **kwargs):
 
     # Camera configuration file
     config_camera_path = os.path.join(
-        get_package_share_directory('drone_odometry2'),   #CUSTOM
+        get_package_share_directory('drone_odometry'),   #CUSTOM
         'config',
         camera_model_val + '.yaml'
     )
