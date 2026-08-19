@@ -51,7 +51,10 @@ class Px4TfPublisher : public rclcpp::Node
     bool feed_twist_to_px4_;
     bool odom_child_is_not_base_link_;
     bool odom_parent_is_not_odom_;
-    
+    // When false, skip publishing to /fmu/in/vehicle_visual_odometry.
+    // Set to false in sewer_exploration so flight_odometry_filter is the sole PX4 VIO source.
+    bool relay_odometry_;
+
 
   public:
     Px4TfPublisher(): Node("px4_tf_pub"){
@@ -74,6 +77,14 @@ class Px4TfPublisher : public rclcpp::Node
       
       this->declare_parameter<bool>("odom_parent_is_not_odom", false);
       odom_parent_is_not_odom_ = this->get_parameter("odom_parent_is_not_odom").as_bool();
+
+      this->declare_parameter<bool>("relay_odometry", true);
+      relay_odometry_ = this->get_parameter("relay_odometry").as_bool();
+      if (!relay_odometry_) {
+        RCLCPP_INFO(this->get_logger(),
+          "relay_odometry=false: /fmu/in/vehicle_visual_odometry will NOT be published by this node."
+          " Ensure another node (e.g. flight_odometry_filter) is the sole PX4 VIO source.");
+      }
 
       rmw_qos_profile_t qos_profile = rmw_qos_profile_sensor_data;
       auto qos = rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 5), qos_profile);
@@ -236,7 +247,10 @@ class Px4TfPublisher : public rclcpp::Node
       }
 
       px4_msgs::msg::VehicleOdometry px4_odom = transform_ros_odometry_to_px4(odom);
-      vehicle_visual_odometry_pub_->publish(px4_odom); 
+      if (relay_odometry_) {
+        vehicle_visual_odometry_pub_->publish(px4_odom);
+      }
+
       
       //todo first_odom = true;
     }
