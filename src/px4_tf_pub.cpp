@@ -51,6 +51,7 @@ class Px4TfPublisher : public rclcpp::Node
     bool feed_twist_to_px4_;
     bool odom_child_is_not_base_link_;
     bool odom_parent_is_not_odom_;
+    bool is_already_ned_;
     // When false, skip publishing to /fmu/in/vehicle_visual_odometry.
     // Set to false in sewer_exploration so flight_odometry_filter is the sole PX4 VIO source.
     bool relay_odometry_;
@@ -77,6 +78,9 @@ class Px4TfPublisher : public rclcpp::Node
       
       this->declare_parameter<bool>("odom_parent_is_not_odom", false);
       odom_parent_is_not_odom_ = this->get_parameter("odom_parent_is_not_odom").as_bool();
+
+      this->declare_parameter<bool>("is_already_ned", false);
+      is_already_ned_ = this->get_parameter("is_already_ned").as_bool();
 
       this->declare_parameter<bool>("relay_odometry", true);
       relay_odometry_ = this->get_parameter("relay_odometry").as_bool();
@@ -259,87 +263,128 @@ class Px4TfPublisher : public rclcpp::Node
       px4_msgs::msg::VehicleOdometry px4_odom;
 
       px4_odom.pose_frame = px4_odom.POSE_FRAME_NED;
-      //position
-      Eigen::Vector3d p_enu(ros_odom.pose.pose.position.x,ros_odom.pose.pose.position.y, ros_odom.pose.pose.position.z);
-      Eigen::Vector3d p_ned = utilities::R_ned_enu*p_enu;
-      px4_odom.position[0] = p_ned.x();
-      px4_odom.position[1] = p_ned.y();
-      px4_odom.position[2] = p_ned.z();
-
-      //attitude
-      Eigen::Vector4d q_enu_flu(ros_odom.pose.pose.orientation.w, ros_odom.pose.pose.orientation.x, ros_odom.pose.pose.orientation.y, ros_odom.pose.pose.orientation.z);
-      Eigen::Matrix3d R_enu_flu = utilities::QuatToMat(q_enu_flu);
-      Eigen::Matrix3d R_ned_frd = utilities::R_ned_enu*R_enu_flu*utilities::R_flu_frd;
-      Eigen::Vector4d q_ned_frd = utilities::rot2quat(R_ned_frd);
-      q_ned_frd = q_ned_frd/q_ned_frd.norm();
-      px4_odom.q[0] = q_ned_frd[0]; 
-      px4_odom.q[1] = q_ned_frd[1];
-      px4_odom.q[2] = q_ned_frd[2];
-      px4_odom.q[3] = q_ned_frd[3];
-
-
-      if(feed_twist_to_px4_){
-        px4_odom.velocity_frame = px4_odom.VELOCITY_FRAME_BODY_FRD;
-        //velocity
-        Eigen::Vector3d v_flu(ros_odom.twist.twist.linear.x, ros_odom.twist.twist.linear.y, ros_odom.twist.twist.linear.z);
-        // Eigen::Vector3d v_flu = R_ned_frd*utilities::R_flu_frd*v_ned; //if VELOCITY_FRAME_NED
-        Eigen::Vector3d v_frd = utilities::R_frd_flu*v_flu;
-        px4_odom.velocity[0] = v_frd.x();
-        px4_odom.velocity[1] = v_frd.y();
-        px4_odom.velocity[2] = v_frd.z();
-
-        //angular velocity
-        Eigen::Vector3d w_flu(ros_odom.twist.twist.angular.x, ros_odom.twist.twist.angular.y, ros_odom.twist.twist.angular.z);
-        Eigen::Vector3d w_frd = utilities::R_frd_flu*w_flu;
-        px4_odom.angular_velocity[0] = w_frd.x();
-        px4_odom.angular_velocity[1] = w_frd.y();
-        px4_odom.angular_velocity[2] = w_frd.z();
-      }
-      else{
-        px4_odom.velocity_frame =2 ;
-        px4_odom.velocity[0] = NAN;
-        px4_odom.velocity[1] = NAN;
-        px4_odom.velocity[2] = NAN;
-        px4_odom.angular_velocity[0] = NAN;
-        px4_odom.angular_velocity[1] = NAN;
-        px4_odom.angular_velocity[2] = NAN;
-      }
       
-      //covariance
-      utilities::Matrix6d cov_pos_ros = utilities::cov_to_mat(ros_odom.pose.covariance);
-      utilities::Matrix6d cov_vel_ros = utilities::cov_to_mat(ros_odom.twist.covariance);
+      if (is_already_ned_) {
+        // Position
+        px4_odom.position[0] = ros_odom.pose.pose.position.x;
+        px4_odom.position[1] = ros_odom.pose.pose.position.y;
+        px4_odom.position[2] = ros_odom.pose.pose.position.z;
+        // Attitude
+        px4_odom.q[0] = ros_odom.pose.pose.orientation.w;
+        px4_odom.q[1] = ros_odom.pose.pose.orientation.x;
+        px4_odom.q[2] = ros_odom.pose.pose.orientation.y;
+        px4_odom.q[3] = ros_odom.pose.pose.orientation.z;
+        // Velocity
+        if(feed_twist_to_px4_) {
+          px4_odom.velocity_frame = px4_odom.VELOCITY_FRAME_BODY_FRD;
+          px4_odom.velocity[0] = ros_odom.twist.twist.linear.x;
+          px4_odom.velocity[1] = ros_odom.twist.twist.linear.y;
+          px4_odom.velocity[2] = ros_odom.twist.twist.linear.z;
+          px4_odom.angular_velocity[0] = ros_odom.twist.twist.angular.x;
+          px4_odom.angular_velocity[1] = ros_odom.twist.twist.angular.y;
+          px4_odom.angular_velocity[2] = ros_odom.twist.twist.angular.z;
+        } else {
+          px4_odom.velocity_frame = 2; // unknown
+          px4_odom.velocity[0] = NAN; px4_odom.velocity[1] = NAN; px4_odom.velocity[2] = NAN;
+          px4_odom.angular_velocity[0] = NAN; px4_odom.angular_velocity[1] = NAN; px4_odom.angular_velocity[2] = NAN;
+        }
+        // Covariance (Pass-through diagonal for simplicity if already aligned)
+        px4_odom.position_variance[0] = ros_odom.pose.covariance[0];
+        px4_odom.position_variance[1] = ros_odom.pose.covariance[7];
+        px4_odom.position_variance[2] = ros_odom.pose.covariance[14];
+        px4_odom.orientation_variance[0] = ros_odom.pose.covariance[21];
+        px4_odom.orientation_variance[1] = ros_odom.pose.covariance[28];
+        px4_odom.orientation_variance[2] = ros_odom.pose.covariance[35];
+        if(feed_twist_to_px4_) {
+          px4_odom.velocity_variance[0] = ros_odom.twist.covariance[0];
+          px4_odom.velocity_variance[1] = ros_odom.twist.covariance[7];
+          px4_odom.velocity_variance[2] = ros_odom.twist.covariance[14];
+        } else {
+          px4_odom.velocity_variance[0] = NAN; px4_odom.velocity_variance[1] = NAN; px4_odom.velocity_variance[2] = NAN;
+        }
+      } else {
+        // ENU to NED conversion
+        //position
+        Eigen::Vector3d p_enu(ros_odom.pose.pose.position.x,ros_odom.pose.pose.position.y, ros_odom.pose.pose.position.z);
+        Eigen::Vector3d p_ned = utilities::R_ned_enu*p_enu;
+        px4_odom.position[0] = p_ned.x();
+        px4_odom.position[1] = p_ned.y();
+        px4_odom.position[2] = p_ned.z();
 
-      Eigen::Matrix3d cov_pos_enu = cov_pos_ros.block(0,0,3,3);
-      Eigen::Matrix3d cov_rot_enu = cov_pos_ros.block(3,3,3,3);
-      Eigen::Matrix3d cov_vel_flu = cov_vel_ros.block(0,0,3,3);
+        //attitude
+        Eigen::Vector4d q_enu_flu(ros_odom.pose.pose.orientation.w, ros_odom.pose.pose.orientation.x, ros_odom.pose.pose.orientation.y, ros_odom.pose.pose.orientation.z);
+        Eigen::Matrix3d R_enu_flu = utilities::QuatToMat(q_enu_flu);
+        Eigen::Matrix3d R_ned_frd = utilities::R_ned_enu*R_enu_flu*utilities::R_flu_frd;
+        Eigen::Vector4d q_ned_frd = utilities::rot2quat(R_ned_frd);
+        q_ned_frd = q_ned_frd/q_ned_frd.norm();
+        px4_odom.q[0] = q_ned_frd[0]; 
+        px4_odom.q[1] = q_ned_frd[1];
+        px4_odom.q[2] = q_ned_frd[2];
+        px4_odom.q[3] = q_ned_frd[3];
 
-      Eigen::Matrix3d R = utilities::R_ned_enu; //pos
-      Eigen::Matrix3d cov_pos_ned = R*cov_pos_enu*R.transpose();
+        if(feed_twist_to_px4_){
+          px4_odom.velocity_frame = px4_odom.VELOCITY_FRAME_BODY_FRD;
+          //velocity
+          Eigen::Vector3d v_flu(ros_odom.twist.twist.linear.x, ros_odom.twist.twist.linear.y, ros_odom.twist.twist.linear.z);
+          // Eigen::Vector3d v_flu = R_ned_frd*utilities::R_flu_frd*v_ned; //if VELOCITY_FRAME_NED
+          Eigen::Vector3d v_frd = utilities::R_frd_flu*v_flu;
+          px4_odom.velocity[0] = v_frd.x();
+          px4_odom.velocity[1] = v_frd.y();
+          px4_odom.velocity[2] = v_frd.z();
 
-      R = utilities::R_frd_flu; //vel 
-      // R = R_ned_frd*utilities::R_flu_frd; //if VELOCITY_FRAME_NED
-      Eigen::Matrix3d cov_vel_frd = R*cov_vel_flu*R.transpose();
+          //angular velocity
+          Eigen::Vector3d w_flu(ros_odom.twist.twist.angular.x, ros_odom.twist.twist.angular.y, ros_odom.twist.twist.angular.z);
+          Eigen::Vector3d w_frd = utilities::R_frd_flu*w_flu;
+          px4_odom.angular_velocity[0] = w_frd.x();
+          px4_odom.angular_velocity[1] = w_frd.y();
+          px4_odom.angular_velocity[2] = w_frd.z();
+        }
+        else{
+          px4_odom.velocity_frame =2 ;
+          px4_odom.velocity[0] = NAN;
+          px4_odom.velocity[1] = NAN;
+          px4_odom.velocity[2] = NAN;
+          px4_odom.angular_velocity[0] = NAN;
+          px4_odom.angular_velocity[1] = NAN;
+          px4_odom.angular_velocity[2] = NAN;
+        }
+        
+        //covariance
+        utilities::Matrix6d cov_pos_ros = utilities::cov_to_mat(ros_odom.pose.covariance);
+        utilities::Matrix6d cov_vel_ros = utilities::cov_to_mat(ros_odom.twist.covariance);
 
-      R = utilities::R_ned_enu*R_enu_flu*utilities::R_flu_frd;
-      Eigen::Matrix3d cov_rot_ned = R*cov_rot_enu*R.transpose();
+        Eigen::Matrix3d cov_pos_enu = cov_pos_ros.block(0,0,3,3);
+        Eigen::Matrix3d cov_rot_enu = cov_pos_ros.block(3,3,3,3);
+        Eigen::Matrix3d cov_vel_flu = cov_vel_ros.block(0,0,3,3);
 
-      px4_odom.position_variance[0] = cov_pos_ned(0,0);
-      px4_odom.position_variance[1] = cov_pos_ned(1,1);
-      px4_odom.position_variance[2] = cov_pos_ned(2,2);
+        Eigen::Matrix3d R = utilities::R_ned_enu; //pos
+        Eigen::Matrix3d cov_pos_ned = R*cov_pos_enu*R.transpose();
 
-      px4_odom.orientation_variance[0] = cov_rot_ned(0,0);
-      px4_odom.orientation_variance[1] = cov_rot_ned(1,1);
-      px4_odom.orientation_variance[2] = cov_rot_ned(2,2);
+        R = utilities::R_frd_flu; //vel 
+        // R = R_ned_frd*utilities::R_flu_frd; //if VELOCITY_FRAME_NED
+        Eigen::Matrix3d cov_vel_frd = R*cov_vel_flu*R.transpose();
 
-      if(feed_twist_to_px4_){
-        px4_odom.velocity_variance[0] = cov_vel_frd(0,0);
-        px4_odom.velocity_variance[1] = cov_vel_frd(1,1);
-        px4_odom.velocity_variance[2] = cov_vel_frd(2,2);
-      }
-      else{
-        px4_odom.velocity_variance[0] = NAN;
-        px4_odom.velocity_variance[1] = NAN;
-        px4_odom.velocity_variance[2] = NAN;
+        R = utilities::R_ned_enu*R_enu_flu*utilities::R_flu_frd;
+        Eigen::Matrix3d cov_rot_ned = R*cov_rot_enu*R.transpose();
+
+        px4_odom.position_variance[0] = cov_pos_ned(0,0);
+        px4_odom.position_variance[1] = cov_pos_ned(1,1);
+        px4_odom.position_variance[2] = cov_pos_ned(2,2);
+
+        px4_odom.orientation_variance[0] = cov_rot_ned(0,0);
+        px4_odom.orientation_variance[1] = cov_rot_ned(1,1);
+        px4_odom.orientation_variance[2] = cov_rot_ned(2,2);
+
+        if(feed_twist_to_px4_){
+          px4_odom.velocity_variance[0] = cov_vel_frd(0,0);
+          px4_odom.velocity_variance[1] = cov_vel_frd(1,1);
+          px4_odom.velocity_variance[2] = cov_vel_frd(2,2);
+        }
+        else{
+          px4_odom.velocity_variance[0] = NAN;
+          px4_odom.velocity_variance[1] = NAN;
+          px4_odom.velocity_variance[2] = NAN;
+        }
       }
       
 
