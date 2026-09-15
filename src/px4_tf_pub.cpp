@@ -83,8 +83,8 @@ class Px4TfPublisher : public rclcpp::Node
       px4_odometry_out_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/px4/odometry/out", qos);
 
        // ros odometry from companion pc, to be relied to px4
-      companion_odometry_sub_ = this->create_subscription<nav_msgs::msg::Odometry>("/odometry/filtered", qos, std::bind(&Px4TfPublisher::companion_odom_cb, this, _1));
-      vehicle_visual_odometry_pub_ = this->create_publisher<px4_msgs::msg::VehicleOdometry>("/fmu/in/vehicle_visual_odometry", qos); // /fmu/in/vehicle_mocap_odometry or /fmu/in/vehicle_visual_odometry
+      companion_odometry_sub_ = this->create_subscription<nav_msgs::msg::Odometry>("/optitrack/body_3/odometry", qos, std::bind(&Px4TfPublisher::companion_odom_cb, this, _1));
+      vehicle_visual_odometry_pub_ = this->create_publisher<px4_msgs::msg::VehicleOdometry>("/fmu/in/vehicle_visual_odometry", 10); // 10 = RELIABLE QoS (necessario per PX4)
       
       trajectory_setpoint_ros_sub_ = this->create_subscription<trajectory_msgs::msg::MultiDOFJointTrajectoryPoint>("/px4/trajectory_setpoint_enu", qos, std::bind(&Px4TfPublisher::trajectory_setpoint_ros_cb, this, _1));
       cmd_vel_ros_sub_ = this->create_subscription<geometry_msgs::msg::Twist>("/px4/cmd_vel", qos, std::bind(&Px4TfPublisher::cmd_vel_ros_cb, this, _1));
