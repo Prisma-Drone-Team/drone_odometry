@@ -52,10 +52,7 @@ class Px4TfPublisher : public rclcpp::Node
     bool odom_child_is_not_base_link_;
     bool odom_parent_is_not_odom_;
     bool is_already_ned_;
-    // When false, skip publishing to /fmu/in/vehicle_visual_odometry.
-    // Set to false in sewer_exploration so flight_odometry_filter is the sole PX4 VIO source.
-    bool relay_odometry_;
-
+    
 
   public:
     Px4TfPublisher(): Node("px4_tf_pub"){
@@ -81,14 +78,6 @@ class Px4TfPublisher : public rclcpp::Node
 
       this->declare_parameter<bool>("is_already_ned", false);
       is_already_ned_ = this->get_parameter("is_already_ned").as_bool();
-
-      this->declare_parameter<bool>("relay_odometry", true);
-      relay_odometry_ = this->get_parameter("relay_odometry").as_bool();
-      if (!relay_odometry_) {
-        RCLCPP_INFO(this->get_logger(),
-          "relay_odometry=false: /fmu/in/vehicle_visual_odometry will NOT be published by this node."
-          " Ensure another node (e.g. flight_odometry_filter) is the sole PX4 VIO source.");
-      }
 
       rmw_qos_profile_t qos_profile = rmw_qos_profile_sensor_data;
       auto qos = rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 5), qos_profile);
@@ -251,10 +240,7 @@ class Px4TfPublisher : public rclcpp::Node
       }
 
       px4_msgs::msg::VehicleOdometry px4_odom = transform_ros_odometry_to_px4(odom);
-      if (relay_odometry_) {
-        vehicle_visual_odometry_pub_->publish(px4_odom);
-      }
-
+      vehicle_visual_odometry_pub_->publish(px4_odom); 
       
       //todo first_odom = true;
     }
@@ -326,7 +312,6 @@ class Px4TfPublisher : public rclcpp::Node
           px4_odom.velocity_frame = px4_odom.VELOCITY_FRAME_BODY_FRD;
           //velocity
           Eigen::Vector3d v_flu(ros_odom.twist.twist.linear.x, ros_odom.twist.twist.linear.y, ros_odom.twist.twist.linear.z);
-          // Eigen::Vector3d v_flu = R_ned_frd*utilities::R_flu_frd*v_ned; //if VELOCITY_FRAME_NED
           Eigen::Vector3d v_frd = utilities::R_frd_flu*v_flu;
           px4_odom.velocity[0] = v_frd.x();
           px4_odom.velocity[1] = v_frd.y();
@@ -361,7 +346,6 @@ class Px4TfPublisher : public rclcpp::Node
         Eigen::Matrix3d cov_pos_ned = R*cov_pos_enu*R.transpose();
 
         R = utilities::R_frd_flu; //vel 
-        // R = R_ned_frd*utilities::R_flu_frd; //if VELOCITY_FRAME_NED
         Eigen::Matrix3d cov_vel_frd = R*cov_vel_flu*R.transpose();
 
         R = utilities::R_ned_enu*R_enu_flu*utilities::R_flu_frd;
